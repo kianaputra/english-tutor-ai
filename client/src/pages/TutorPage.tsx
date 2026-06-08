@@ -246,7 +246,7 @@ export default function TutorPage() {
       <div className="absolute inset-0 w-full h-full flex items-center justify-center">
         <img
           ref={tutorImageRef}
-          src="https://placehold.co/900x1200/6b6b6b/white?text=Teacher+Photo"
+          src="/manus-storage/teacher_b8d95983.png"
           alt="Ms. Maria"
           className="w-full h-full object-cover object-center transition-all duration-150"
           style={{
@@ -256,7 +256,7 @@ export default function TutorPage() {
       </div>
 
       {/* Animated Mouth Overlay */}
-      <div className="absolute bottom-1/3 left-1/2 transform -translate-x-1/2 z-20">
+      <div className="absolute bottom-2/5 left-1/2 transform -translate-x-1/2 z-20">
         <SimpleMouthAnimation
           shape={currentMouthShape}
           isActive={isSpeaking}
