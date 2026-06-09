@@ -250,7 +250,7 @@ export default function TutorPageMediaPipe() {
       <div className="absolute inset-0 w-full h-full flex items-center justify-center">
         <img
           ref={tutorImageRef}
-          src="/manus-storage/teacher_b8d95983.png"
+          src="/teacher.png"
           alt="Ms. Maria"
           className="w-full h-full object-cover object-center transition-all duration-150"
           style={{
