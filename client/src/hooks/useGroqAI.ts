@@ -60,12 +60,11 @@ export function useGroqAI(options: UseGroqAIOptions) {
           { role: 'user', content: userMessage },
         ];
 
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        const response = await fetch('/api/chat', {  // tidak perlu apiKey
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`,
-          },
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: requestMessages, ... }),
+        });
           body: JSON.stringify({
             model: 'llama-3.3-70b-versatile',
             messages: requestMessages,
