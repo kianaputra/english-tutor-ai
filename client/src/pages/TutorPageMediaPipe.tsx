@@ -20,45 +20,79 @@ export default function TutorPageMediaPipe() {
 
   const chatAreaRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
-  const isActiveRef = useRef(false);
+
+  // Single source of truth via refs
   const isSpeakingRef = useRef(false);
+  const isListeningRef = useRef(false);
+  const isThinkingRef = useRef(false);  // prevent double-submit
   const inputModeRef = useRef<'mic' | 'chat'>('mic');
   const apiKeyRef = useRef(apiKey);
   const messagesRef = useRef<Message[]>([]);
   const currentModeRef = useRef('conversation');
   const currentLevelRef = useRef('intermediate');
 
-  useEffect(() => { isSpeakingRef.current = isSpeaking; }, [isSpeaking]);
   useEffect(() => { inputModeRef.current = inputMode; }, [inputMode]);
   useEffect(() => { apiKeyRef.current = apiKey; }, [apiKey]);
   useEffect(() => { currentModeRef.current = currentMode; }, [currentMode]);
   useEffect(() => { currentLevelRef.current = currentLevel; }, [currentLevel]);
 
+  // Only start mic when truly idle
   const tryStartMic = () => {
     if (inputModeRef.current !== 'mic') return;
-    if (isSpeakingRef.current) return;
-    if (isActiveRef.current) return;
+    if (isSpeakingRef.current) return;   // AI is speaking — don't listen
+    if (isListeningRef.current) return;  // already listening
+    if (isThinkingRef.current) return;   // waiting for API
     try { recognitionRef.current?.start(); } catch (_) {}
   };
 
+  // Setup recognition ONCE
   useEffect(() => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) return;
+
     const rec = new SR();
     rec.lang = 'en-US';
     rec.continuous = false;
     rec.interimResults = false;
-    rec.onstart = () => { isActiveRef.current = true; setIsListening(true); setStatus('listening'); };
+
+    rec.onstart = () => {
+      isListeningRef.current = true;
+      setIsListening(true);
+      setStatus('listening');
+    };
+
     rec.onresult = (e: any) => {
       const text = e.results[e.results.length - 1][0].transcript.trim();
-      if (text) { rec.stop(); processUserInputRef.current(text); }
+      if (text && !isThinkingRef.current && !isSpeakingRef.current) {
+        rec.stop();
+        processUserInputRef.current(text);
+      }
     };
-    rec.onerror = () => { isActiveRef.current = false; setIsListening(false); setStatus('ready'); setTimeout(tryStartMic, 600); };
-    rec.onend = () => { isActiveRef.current = false; setIsListening(false); setTimeout(tryStartMic, 400); };
+
+    rec.onerror = (e: any) => {
+      isListeningRef.current = false;
+      setIsListening(false);
+      if (e.error === 'no-speech') {
+        // Timeout — restart quietly
+        setTimeout(tryStartMic, 300);
+      } else {
+        setStatus('ready');
+        setTimeout(tryStartMic, 1000);
+      }
+    };
+
+    rec.onend = () => {
+      isListeningRef.current = false;
+      setIsListening(false);
+      // Only restart if idle
+      setTimeout(tryStartMic, 500);
+    };
+
     recognitionRef.current = rec;
     return () => { try { rec.abort(); } catch (_) {} };
   }, []);
 
+  // Greeting on load
   useEffect(() => {
     const t = setTimeout(() => {
       const greetings = [
@@ -79,19 +113,29 @@ export default function TutorPageMediaPipe() {
       messagesRef.current = next;
       return next;
     });
-    setTimeout(() => { if (chatAreaRef.current) chatAreaRef.current.scrollTop = chatAreaRef.current.scrollHeight; }, 50);
+    setTimeout(() => {
+      if (chatAreaRef.current) chatAreaRef.current.scrollTop = chatAreaRef.current.scrollHeight;
+    }, 50);
   };
 
   const speakNatural = (text: string) => {
     if (!text.trim()) return;
+
+    // Stop mic BEFORE speaking so AI voice won't trigger recognition
+    try { recognitionRef.current?.abort(); } catch (_) {}
+    isListeningRef.current = false;
+    setIsListening(false);
+
     window.speechSynthesis.cancel();
     isSpeakingRef.current = true;
     setIsSpeaking(true);
     setStatus('speaking');
+
     const utt = new SpeechSynthesisUtterance(text);
     utt.lang = 'en-US';
     utt.rate = 0.88;
     utt.pitch = 1.1;
+
     const applyVoice = () => {
       const voices = window.speechSynthesis.getVoices();
       const v = voices.find(v => v.lang.startsWith('en') && v.name.toLowerCase().includes('female'))
@@ -101,20 +145,35 @@ export default function TutorPageMediaPipe() {
     };
     applyVoice();
     if (!window.speechSynthesis.getVoices().length) window.speechSynthesis.onvoiceschanged = applyVoice;
-    utt.onend = () => { isSpeakingRef.current = false; setIsSpeaking(false); setStatus('ready'); setTimeout(tryStartMic, 600); };
-    utt.onerror = () => { isSpeakingRef.current = false; setIsSpeaking(false); setStatus('ready'); setTimeout(tryStartMic, 600); };
+
+    utt.onend = () => {
+      isSpeakingRef.current = false;
+      setIsSpeaking(false);
+      setStatus('ready');
+      // Wait a moment after AI stops, then listen for user
+      setTimeout(tryStartMic, 800);
+    };
+    utt.onerror = () => {
+      isSpeakingRef.current = false;
+      setIsSpeaking(false);
+      setStatus('ready');
+      setTimeout(tryStartMic, 800);
+    };
+
     window.speechSynthesis.speak(utt);
   };
 
   const callGroqAI = async (userText: string): Promise<string> => {
     const key = apiKeyRef.current;
     if (!key?.startsWith('gsk_')) throw new Error('Valid Groq API key required');
+
     const systemPrompts: Record<string, string> = {
-      conversation: `You are Ms. Maria, a kind English tutor. Student level: ${currentLevelRef.current}. Reply in 2-3 sentences. Gently correct grammar mistakes with "(correction: ...)". English only.`,
+      conversation: `You are Ms. Maria, a kind English tutor. Student level: ${currentLevelRef.current}. Reply in 2-3 sentences max. Gently correct grammar mistakes with "(correction: ...)". English only.`,
       grammar: `You are Ms. Maria, grammar expert. Level: ${currentLevelRef.current}. Format: **Corrected:** [sentence] **Mistakes:** - [explanation] **Tip:** [rule]. English only.`,
       vocabulary: `You are Ms. Maria. Teach 3-5 words: • Word (pronunciation): meaning + example. English only.`,
       roleplay: `You are Ms. Maria, roleplay partner. Level: ${currentLevelRef.current}. Natural dialogue. End with 💡 Tip: [phrase]. English only.`,
     };
+
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
@@ -122,13 +181,17 @@ export default function TutorPageMediaPipe() {
         model: 'llama-3.3-70b-versatile',
         messages: [
           { role: 'system', content: systemPrompts[currentModeRef.current] || systemPrompts.conversation },
-          ...messagesRef.current.slice(-8).map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content })),
+          ...messagesRef.current.slice(-8).map(m => ({
+            role: m.role === 'user' ? 'user' : 'assistant',
+            content: m.content,
+          })),
           { role: 'user', content: userText },
         ],
-        max_tokens: 550,
+        max_tokens: 200,  // keep responses short
         temperature: 0.68,
       }),
     });
+
     if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message || 'API error'); }
     return (await res.json()).choices[0].message.content;
   };
@@ -136,13 +199,19 @@ export default function TutorPageMediaPipe() {
   const processUserInput = async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
+    if (isThinkingRef.current) return;  // already processing
+    if (isSpeakingRef.current) return;  // AI is speaking, ignore
+
     if (!apiKeyRef.current) {
       addMessage('bot', "Please add your Groq API key. Tap ☰ menu.");
       speakNatural("Please add your Groq API key first.");
       return;
     }
+
+    isThinkingRef.current = true;
     addMessage('user', trimmed);
     setStatus('thinking');
+
     try {
       const reply = await callGroqAI(trimmed);
       addMessage('bot', reply);
@@ -150,7 +219,9 @@ export default function TutorPageMediaPipe() {
     } catch (err) {
       addMessage('bot', `⚠️ ${err instanceof Error ? err.message : 'Unknown error'}`);
       setStatus('ready');
-      setTimeout(tryStartMic, 600);
+      setTimeout(tryStartMic, 800);
+    } finally {
+      isThinkingRef.current = false;
     }
   };
 
@@ -176,23 +247,23 @@ export default function TutorPageMediaPipe() {
   return (
     <div className="flex w-full h-screen overflow-hidden bg-black">
 
-      {/* ── LEFT: Chat panel (always visible) ── */}
+      {/* LEFT: Chat panel */}
       <div className="relative z-10 flex flex-col w-72 h-full shrink-0 bg-black/80 backdrop-blur-md border-r border-white/10">
 
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 shrink-0">
           <div className="flex items-center gap-2">
             <span className={`w-2 h-2 rounded-full shrink-0 ${
-              status === 'ready' ? 'bg-emerald-400' :
+              status === 'ready'     ? 'bg-emerald-400' :
               status === 'listening' ? 'bg-orange-400 animate-pulse' :
-              status === 'thinking' ? 'bg-yellow-400 animate-pulse' :
-              'bg-blue-400 animate-pulse'
+              status === 'thinking'  ? 'bg-yellow-400 animate-pulse' :
+                                       'bg-blue-400 animate-pulse'
             }`} />
             <span className="text-xs font-medium text-white/80 truncate">
-              {status === 'ready' ? 'Ready' :
+              {status === 'ready'     ? 'Ready' :
                status === 'listening' ? '🎤 Listening...' :
-               status === 'thinking' ? '💭 Thinking...' :
-               '🔊 Speaking...'}
+               status === 'thinking'  ? '💭 Thinking...' :
+                                        '🔊 Speaking...'}
             </span>
           </div>
           <button onClick={() => setShowMenu(!showMenu)}
@@ -219,7 +290,7 @@ export default function TutorPageMediaPipe() {
           ))}
         </div>
 
-        {/* Input area */}
+        {/* Input */}
         <div className="p-3 border-t border-white/10 shrink-0">
           {inputMode === 'mic' ? (
             <div className={`w-full py-2 rounded-full text-xs font-medium text-center border transition-all ${
@@ -227,7 +298,7 @@ export default function TutorPageMediaPipe() {
               isSpeaking  ? 'border-blue-400/60 bg-blue-500/15 text-blue-300' :
                             'border-white/15 bg-white/5 text-white/40'
             }`}>
-              {isSpeaking ? '🔊 Speaking...' : isListening ? '🎤 Listening...' : '🎙️ Mic always on'}
+              {isSpeaking ? '🔊 Ms. Maria speaking...' : isListening ? '🎤 Listening...' : '🎙️ Mic on — speak anytime'}
             </div>
           ) : (
             <div className="flex gap-2">
@@ -245,19 +316,18 @@ export default function TutorPageMediaPipe() {
         </div>
       </div>
 
-      {/* ── RIGHT: Teacher image ── */}
+      {/* RIGHT: Teacher image */}
       <div className="relative flex-1 h-full">
         <img src="/teacher.png" alt="Ms. Maria"
           className="absolute inset-0 w-full h-full object-cover"
           style={{ objectPosition: '50% 10%' }}
         />
-        {/* Name tag bottom center */}
         <div className="absolute bottom-5 left-1/2 -translate-x-1/2 bg-black/50 backdrop-blur-md rounded-full px-5 py-1.5 border border-white/10">
           <span className="text-sm font-medium text-white">Ms. Maria · English Tutor AI</span>
         </div>
       </div>
 
-      {/* ── MENU ── */}
+      {/* MENU */}
       {showMenu && (
         <div className="absolute top-14 left-4 z-50 w-64 bg-gray-950/97 backdrop-blur-xl rounded-2xl border border-white/10 p-4 shadow-2xl flex flex-col gap-3">
           <div>
@@ -267,9 +337,7 @@ export default function TutorPageMediaPipe() {
                 className="flex-1 bg-gray-800 border border-gray-600 rounded-full px-3 py-1.5 text-xs text-white placeholder-gray-500 outline-none min-w-0" />
               <button onClick={handleSaveApiKey} className="bg-blue-600 text-white rounded-full px-3 py-1.5 text-xs font-bold shrink-0">Save</button>
             </div>
-            <p className="text-xs text-gray-500 mt-1">
-              Free key: <a href="https://console.groq.com" target="_blank" rel="noopener noreferrer" className="text-blue-400">console.groq.com</a>
-            </p>
+            <p className="text-xs text-gray-500 mt-1">Free key: <a href="https://console.groq.com" target="_blank" rel="noopener noreferrer" className="text-blue-400">console.groq.com</a></p>
           </div>
           <div>
             <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">📘 Mode</p>
