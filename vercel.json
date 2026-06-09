@@ -1,11 +1,7 @@
 {
-  "buildCommand": "pnpm build",
-  "devCommand": "pnpm dev",
-  "installCommand": "pnpm install",
+  "buildCommand": "cd client && pnpm build",
+  "outputDirectory": "client/dist",
   "framework": "vite",
-  "outputDirectory": "dist",
-  "env": {
-    "VITE_FRONTEND_FORGE_API_KEY": "@vite_frontend_forge_api_key",
-    "VITE_FRONTEND_FORGE_API_URL": "@vite_frontend_forge_api_url"
-  }
+  "installCommand": "pnpm install",
+  "devCommand": "cd client && pnpm dev"
 }
