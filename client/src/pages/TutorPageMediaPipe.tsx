@@ -6,16 +6,7 @@ interface Message {
   content: string;
 }
 
-const MOUTH_FRAMES = [
-  [0.12, '40%'],
-  [0.28, '45%'],
-  [0.45, '50%'],
-  [0.28, '45%'],
-  [0.15, '40%'],
-  [0.38, '48%'],
-  [0.50, '50%'],
-  [0.22, '44%'],
-];
+const MOUTH_FRAMES = [0.08, 0.22, 0.40, 0.55, 0.40, 0.22, 0.10, 0.35, 0.50, 0.30];
 
 export default function TutorPageMediaPipe() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -28,160 +19,88 @@ export default function TutorPageMediaPipe() {
   const [currentLevel, setCurrentLevel] = useState('intermediate');
   const [inputMode, setInputMode] = useState<'mic' | 'chat'>('mic');
   const [manualInput, setManualInput] = useState('');
-  const [mouthFrame, setMouthFrame] = useState(0);
-  const [mouthOpen, setMouthOpen] = useState(false);
+  const [mouthScale, setMouthScale] = useState(0);
 
   const chatAreaRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
   const mouthAnimRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const frameIndexRef = useRef(0);
+
+  // Stable refs to avoid stale closures
   const isSpeakingRef = useRef(false);
   const isListeningRef = useRef(false);
   const inputModeRef = useRef<'mic' | 'chat'>('mic');
+  const apiKeyRef = useRef(apiKey);
+  const messagesRef = useRef<Message[]>([]);
+  const currentModeRef = useRef('conversation');
+  const currentLevelRef = useRef('intermediate');
 
-  // Keep refs in sync
   useEffect(() => { isSpeakingRef.current = isSpeaking; }, [isSpeaking]);
   useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
   useEffect(() => { inputModeRef.current = inputMode; }, [inputMode]);
+  useEffect(() => { apiKeyRef.current = apiKey; }, [apiKey]);
+  useEffect(() => { currentModeRef.current = currentMode; }, [currentMode]);
+  useEffect(() => { currentLevelRef.current = currentLevel; }, [currentLevel]);
 
+  // Mouth animation
   const startMouthAnimation = useCallback(() => {
-    setMouthOpen(true);
     frameIndexRef.current = 0;
     const animate = () => {
       frameIndexRef.current = (frameIndexRef.current + 1) % MOUTH_FRAMES.length;
-      setMouthFrame(frameIndexRef.current);
-      // Slower, more natural speed: 120-200ms per frame
-      mouthAnimRef.current = setTimeout(animate, 120 + Math.random() * 80);
+      setMouthScale(MOUTH_FRAMES[frameIndexRef.current]);
+      mouthAnimRef.current = setTimeout(animate, 130 + Math.random() * 90);
     };
-    mouthAnimRef.current = setTimeout(animate, 120);
+    setMouthScale(0.2);
+    mouthAnimRef.current = setTimeout(animate, 130);
   }, []);
 
   const stopMouthAnimation = useCallback(() => {
-    if (mouthAnimRef.current) {
-      clearTimeout(mouthAnimRef.current);
-      mouthAnimRef.current = null;
-    }
-    setMouthOpen(false);
-    setMouthFrame(0);
+    if (mouthAnimRef.current) { clearTimeout(mouthAnimRef.current); mouthAnimRef.current = null; }
+    setMouthScale(0);
   }, []);
 
-  // Speech recognition — set up ONCE
+  // Setup speech recognition ONCE
   useEffect(() => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) return;
 
-    const recognition = new SR();
-    recognition.lang = 'en-US';
-    recognition.continuous = false;
-    recognition.interimResults = false; // only fire on final result
+    const rec = new SR();
+    rec.lang = 'en-US';
+    rec.continuous = false;
+    rec.interimResults = false;
 
-    recognition.onstart = () => {
-      isListeningRef.current = true;
-      setIsListening(true);
-      setStatus('listening');
+    rec.onstart = () => { isListeningRef.current = true; setIsListening(true); setStatus('listening'); };
+    rec.onresult = (e: any) => {
+      const text = e.results[e.results.length - 1][0].transcript.trim();
+      if (text) { rec.stop(); processUserInputRef.current(text); }
     };
-
-    recognition.onresult = (event: any) => {
-      const finalText = event.results[event.results.length - 1][0].transcript.trim();
-      if (finalText) {
-        recognition.stop();
-        processUserInputRef.current(finalText);
-      }
-    };
-
-    recognition.onerror = (e: any) => {
+    rec.onerror = () => { isListeningRef.current = false; setIsListening(false); setStatus('ready'); };
+    rec.onend = () => {
       isListeningRef.current = false;
       setIsListening(false);
-      setStatus('ready');
+      // DO NOT auto-restart — user must tap mic button manually
     };
 
-    recognition.onend = () => {
-      isListeningRef.current = false;
-      setIsListening(false);
-      // Only auto-restart if mic mode, not speaking, not already listening
-      if (inputModeRef.current === 'mic' && !isSpeakingRef.current) {
-        setTimeout(() => {
-          if (!isSpeakingRef.current && !isListeningRef.current && inputModeRef.current === 'mic') {
-            try { recognition.start(); } catch (_) {}
-          }
-        }, 800);
-      }
-    };
-
-    recognitionRef.current = recognition;
-    return () => { try { recognition.stop(); } catch (_) {} };
-  }, []); // only once
-
-  // Auto-greet on load
-  useEffect(() => {
-    const timer = setTimeout(() => triggerGreetingRef.current(), 1400);
-    return () => clearTimeout(timer);
+    recognitionRef.current = rec;
+    return () => { try { rec.abort(); } catch (_) {} };
   }, []);
 
-  const startListening = () => {
-    if (recognitionRef.current && !isSpeakingRef.current && !isListeningRef.current) {
-      try { recognitionRef.current.start(); } catch (_) {}
-    }
-  };
+  // Greeting on load — no auto-mic
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const greetings = [
+        "Hello! I'm Ms. Maria, your English tutor. How are you today?",
+        "Welcome! I'm Ms. Maria. Ready to practice English together?",
+        "Hi there! I'm Ms. Maria. What would you like to practice today?",
+      ];
+      const msg = greetings[Math.floor(Math.random() * greetings.length)];
+      addMessageDirect('bot', msg);
+      speakNaturalDirect(msg);
+    }, 1000);
+    return () => clearTimeout(t);
+  }, []);
 
-  const speakNatural = (text: string) => {
-    if (!text.trim()) return;
-    window.speechSynthesis.cancel();
-    isSpeakingRef.current = true;
-    setIsSpeaking(true);
-    setStatus('speaking');
-    startMouthAnimation();
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-US';
-    utterance.rate = 0.88;
-    utterance.pitch = 1.1;
-
-    const applyVoice = () => {
-      const voices = window.speechSynthesis.getVoices();
-      const preferred =
-        voices.find(v => v.lang.startsWith('en') && v.name.toLowerCase().includes('female')) ||
-        voices.find(v => v.lang === 'en-US') ||
-        voices.find(v => v.lang.startsWith('en'));
-      if (preferred) utterance.voice = preferred;
-    };
-    applyVoice();
-    if (window.speechSynthesis.getVoices().length === 0) {
-      window.speechSynthesis.onvoiceschanged = applyVoice;
-    }
-
-    utterance.onend = () => {
-      isSpeakingRef.current = false;
-      setIsSpeaking(false);
-      setStatus('ready');
-      stopMouthAnimation();
-      if (inputModeRef.current === 'mic') {
-        setTimeout(() => startListening(), 500);
-      }
-    };
-
-    utterance.onerror = () => {
-      isSpeakingRef.current = false;
-      setIsSpeaking(false);
-      setStatus('ready');
-      stopMouthAnimation();
-    };
-
-    window.speechSynthesis.speak(utterance);
-  };
-
-  // Use ref so recognition callback always has latest version
-  const messagesRef = useRef<Message[]>([]);
-  const currentModeRef = useRef('conversation');
-  const currentLevelRef = useRef('intermediate');
-  const apiKeyRef = useRef('');
-
-  useEffect(() => { messagesRef.current = messages; }, [messages]);
-  useEffect(() => { currentModeRef.current = currentMode; }, [currentMode]);
-  useEffect(() => { currentLevelRef.current = currentLevel; }, [currentLevel]);
-  useEffect(() => { apiKeyRef.current = apiKey; }, [apiKey]);
-
-  const addMessage = (role: 'user' | 'bot', content: string) => {
+  const addMessageDirect = (role: 'user' | 'bot', content: string) => {
     setMessages(prev => {
       const next = [...prev, { role, content }];
       messagesRef.current = next;
@@ -190,6 +109,52 @@ export default function TutorPageMediaPipe() {
     setTimeout(() => {
       if (chatAreaRef.current) chatAreaRef.current.scrollTop = chatAreaRef.current.scrollHeight;
     }, 50);
+  };
+
+  const speakNaturalDirect = (text: string) => {
+    if (!text.trim()) return;
+    window.speechSynthesis.cancel();
+    isSpeakingRef.current = true;
+    setIsSpeaking(true);
+    setStatus('speaking');
+    startMouthAnimation();
+
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.lang = 'en-US';
+    utt.rate = 0.88;
+    utt.pitch = 1.1;
+
+    const applyVoice = () => {
+      const voices = window.speechSynthesis.getVoices();
+      const v = voices.find(v => v.lang.startsWith('en') && v.name.toLowerCase().includes('female'))
+             || voices.find(v => v.lang === 'en-US')
+             || voices.find(v => v.lang.startsWith('en'));
+      if (v) utt.voice = v;
+    };
+    applyVoice();
+    if (!window.speechSynthesis.getVoices().length) window.speechSynthesis.onvoiceschanged = applyVoice;
+
+    utt.onend = () => {
+      isSpeakingRef.current = false;
+      setIsSpeaking(false);
+      setStatus('ready');
+      stopMouthAnimation();
+      // After speaking, if mic mode → auto-start listening
+      if (inputModeRef.current === 'mic') {
+        setTimeout(() => {
+          if (!isSpeakingRef.current && !isListeningRef.current) {
+            try { recognitionRef.current?.start(); } catch (_) {}
+          }
+        }, 600);
+      }
+    };
+    utt.onerror = () => {
+      isSpeakingRef.current = false;
+      setIsSpeaking(false);
+      setStatus('ready');
+      stopMouthAnimation();
+    };
+    window.speechSynthesis.speak(utt);
   };
 
   const callGroqAI = async (userText: string): Promise<string> => {
@@ -203,7 +168,7 @@ export default function TutorPageMediaPipe() {
       roleplay: `You are Ms. Maria, roleplay partner. Level: ${currentLevelRef.current}. Natural dialogue. End with 💡 Tip: [phrase]. English only.`,
     };
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
       body: JSON.stringify({
@@ -217,58 +182,48 @@ export default function TutorPageMediaPipe() {
         temperature: 0.68,
       }),
     });
-
-    if (!response.ok) { const err = await response.json(); throw new Error(err.error?.message || 'API error'); }
-    const data = await response.json();
-    return data.choices[0].message.content;
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message || 'API error'); }
+    return (await res.json()).choices[0].message.content;
   };
 
   const processUserInput = async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
-
     if (!apiKeyRef.current) {
-      addMessage('bot', "Please add your Groq API key first. Tap the ☰ menu.");
-      speakNatural("Please add your Groq API key first.");
+      addMessageDirect('bot', "Please add your Groq API key first. Tap the ☰ menu.");
+      speakNaturalDirect("Please add your Groq API key first.");
       return;
     }
-
-    addMessage('user', trimmed);
+    addMessageDirect('user', trimmed);
     setStatus('thinking');
-
     try {
       const reply = await callGroqAI(trimmed);
-      addMessage('bot', reply);
-      speakNatural(reply);
+      addMessageDirect('bot', reply);
+      speakNaturalDirect(reply);
     } catch (err) {
-      addMessage('bot', `⚠️ ${err instanceof Error ? err.message : 'Unknown error'}`);
+      addMessageDirect('bot', `⚠️ ${err instanceof Error ? err.message : 'Unknown error'}`);
       setStatus('ready');
     }
   };
 
-  // Stable ref so recognition callback always calls latest
   const processUserInputRef = useRef(processUserInput);
   useEffect(() => { processUserInputRef.current = processUserInput; });
 
-  const triggerGreeting = () => {
-    const greetings = [
-      "Hello! I'm Ms. Maria, your English tutor. How are you today?",
-      "Welcome! I'm Ms. Maria. Ready to practice English together?",
-      "Hi there! I'm Ms. Maria. What would you like to practice today?",
-    ];
-    const msg = greetings[Math.floor(Math.random() * greetings.length)];
-    addMessage('bot', msg);
-    speakNatural(msg);
+  const handleMicButton = () => {
+    if (isSpeakingRef.current) return;
+    if (isListeningRef.current) {
+      try { recognitionRef.current?.stop(); } catch (_) {}
+    } else {
+      try { recognitionRef.current?.start(); } catch (_) {}
+    }
   };
-  const triggerGreetingRef = useRef(triggerGreeting);
-  useEffect(() => { triggerGreetingRef.current = triggerGreeting; });
 
   const handleSaveApiKey = () => {
     if (apiKey.startsWith('gsk_')) {
       localStorage.setItem('eng_tutor_groq', apiKey);
       apiKeyRef.current = apiKey;
-      addMessage('bot', "✅ API key saved! Let's start learning English!");
-      speakNatural("API key saved. Let's start!");
+      addMessageDirect('bot', "✅ API key saved! Let's start learning English!");
+      speakNaturalDirect("API key saved. Let's start!");
       setShowMenu(false);
     } else {
       alert('Please enter a valid Groq API key starting with gsk_');
@@ -279,69 +234,68 @@ export default function TutorPageMediaPipe() {
     if (manualInput.trim()) { processUserInput(manualInput); setManualInput(''); }
   };
 
-  const frame = MOUTH_FRAMES[mouthFrame];
-  const mouthScaleY = mouthOpen ? (frame[0] as number) : 0.06;
-
   return (
     <div className="relative w-full h-screen overflow-hidden bg-black">
 
-      {/* Teacher image fullscreen */}
-      <img
-        src="/teacher.png"
-        alt="Ms. Maria"
-        className="absolute inset-0 w-full h-full object-cover object-top"
-        style={{
-          filter: isSpeaking ? 'brightness(1.04)' : 'brightness(1)',
-          transition: 'filter 0.3s ease',
-        }}
+      {/* Teacher fullscreen */}
+      <img src="/teacher.png" alt="Ms. Maria"
+        className="absolute inset-0 w-full h-full object-cover"
+        style={{ filter: isSpeaking ? 'brightness(1.04)' : 'brightness(1)', transition: 'filter 0.3s', objectPosition: '50% 14%' }}
       />
 
-      {/* Mouth overlay — 74% from top, centered */}
+      {/* Mouth overlay — adjust top% to match your image */}
       <div className="absolute pointer-events-none"
-        style={{ left: '50%', top: '74%', transform: 'translate(-50%, -50%)', width: '7vw', minWidth: '38px', maxWidth: '65px', aspectRatio: '2.2/1', zIndex: 10 }}>
-        {/* Lip */}
+        style={{
+          left: '50%', top: '88%',
+          transform: 'translate(-50%, -50%)',
+          width: 'clamp(36px, 6vw, 60px)',
+          height: 'clamp(16px, 2.5vw, 28px)',
+          zIndex: 10,
+        }}>
+        {/* Lips */}
         <div style={{
           position: 'absolute', inset: 0,
-          background: 'rgba(148, 52, 52, 0.9)',
-          borderRadius: frame[1] as string,
-          transform: `scaleY(${mouthScaleY})`,
+          background: '#8B3A3A',
+          borderRadius: '50%',
+          transform: `scaleY(${Math.max(mouthScale, 0.05)})`,
           transformOrigin: 'center',
-          transition: 'transform 0.1s ease, border-radius 0.1s ease',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+          transition: 'transform 0.12s ease',
+          boxShadow: 'inset 0 -2px 4px rgba(0,0,0,0.4)',
         }} />
-        {/* Inner dark */}
-        {mouthOpen && mouthScaleY > 0.18 && (
+        {/* Dark interior */}
+        {mouthScale > 0.18 && (
           <div style={{
-            position: 'absolute', left: '18%', right: '18%', top: '18%', bottom: '18%',
-            background: 'rgba(15, 4, 4, 0.93)',
-            borderRadius: '40%',
-            transform: `scaleY(${mouthScaleY * 0.6})`,
+            position: 'absolute', left: '20%', right: '20%', top: '20%', bottom: '20%',
+            background: '#1a0505',
+            borderRadius: '50%',
+            transform: `scaleY(${mouthScale * 0.55})`,
             transformOrigin: 'center',
-            transition: 'transform 0.1s ease',
+            transition: 'transform 0.12s ease',
           }} />
         )}
       </div>
 
       {/* Gradients */}
-      <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-black/60 to-transparent pointer-events-none" />
-      <div className="absolute inset-x-0 bottom-0 h-56 bg-gradient-to-t from-black/80 to-transparent pointer-events-none" />
+      <div className="absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-black/60 to-transparent pointer-events-none" />
+      <div className="absolute inset-x-0 bottom-0 h-60 bg-gradient-to-t from-black/85 to-transparent pointer-events-none" />
 
-      {/* Status badge */}
+      {/* Status */}
       <div className="absolute top-5 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-black/50 backdrop-blur-md rounded-full px-4 py-1.5 border border-white/10">
         <span className={`w-2 h-2 rounded-full ${
-          status === 'ready' ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' :
-          status === 'listening' ? 'bg-orange-400 shadow-[0_0_6px_#fb923c] animate-pulse' :
-          status === 'thinking' ? 'bg-yellow-400 shadow-[0_0_6px_#facc15] animate-pulse' :
-          'bg-blue-400 shadow-[0_0_6px_#60a5fa] animate-pulse'
+          status === 'ready' ? 'bg-emerald-400' :
+          status === 'listening' ? 'bg-orange-400 animate-pulse' :
+          status === 'thinking' ? 'bg-yellow-400 animate-pulse' :
+          'bg-blue-400 animate-pulse'
         }`} />
-        <span className="text-xs font-medium text-white/90 tracking-wide">
+        <span className="text-xs font-medium text-white/90">
           Ms. Maria · {status.charAt(0).toUpperCase() + status.slice(1)}
         </span>
       </div>
 
       {/* Chat */}
-      <div ref={chatAreaRef} className="absolute top-16 left-1/2 -translate-x-1/2 w-11/12 max-w-sm z-20 flex flex-col gap-2 overflow-y-auto"
-        style={{ maxHeight: 'calc(100vh - 180px)', scrollBehavior: 'smooth' }}>
+      <div ref={chatAreaRef}
+        className="absolute top-16 left-1/2 -translate-x-1/2 w-11/12 max-w-sm z-20 flex flex-col gap-2 overflow-y-auto"
+        style={{ maxHeight: 'calc(100vh - 180px)' }}>
         {messages.map((msg, idx) => (
           <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`max-w-xs px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
@@ -362,23 +316,24 @@ export default function TutorPageMediaPipe() {
             <input type="text" value={manualInput} onChange={e => setManualInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSendManual()} placeholder="Type in English..."
               className="flex-1 bg-black/70 backdrop-blur-md border border-white/20 rounded-full px-4 py-2.5 text-sm text-white placeholder-white/40 outline-none focus:border-blue-400" />
-            <button onClick={handleSendManual} className="w-10 h-10 bg-blue-600 hover:bg-blue-500 rounded-full flex items-center justify-center transition-colors">
+            <button onClick={handleSendManual}
+              className="w-10 h-10 bg-blue-600 hover:bg-blue-500 rounded-full flex items-center justify-center">
               <Send className="w-4 h-4 text-white" />
             </button>
           </div>
         ) : (
-          <button onClick={startListening} disabled={isListening || isSpeaking}
+          <button onClick={handleMicButton} disabled={isSpeaking}
             className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-full text-sm font-medium transition-all ${
               isListening ? 'bg-orange-500/80 text-white animate-pulse' :
               isSpeaking ? 'bg-blue-600/50 text-white/50 cursor-not-allowed' :
               'bg-black/60 backdrop-blur-md border border-white/20 text-white hover:bg-white/10'
             }`}>
             {isListening ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-            {isSpeaking ? '🔊 Speaking...' : isListening ? '🎤 Listening...' : '🎙️ Tap to speak'}
+            {isSpeaking ? '🔊 Speaking...' : isListening ? '🎤 Listening... (tap to stop)' : '🎙️ Tap to speak'}
           </button>
         )}
         <button onClick={() => setShowMenu(!showMenu)}
-          className="w-10 h-10 bg-black/60 backdrop-blur-md border border-white/20 rounded-full flex items-center justify-center hover:bg-white/10 transition-colors">
+          className="w-10 h-10 bg-black/60 backdrop-blur-md border border-white/20 rounded-full flex items-center justify-center hover:bg-white/10">
           {showMenu ? <X className="w-5 h-5 text-white" /> : <Menu className="w-5 h-5 text-white" />}
         </button>
       </div>
@@ -390,17 +345,17 @@ export default function TutorPageMediaPipe() {
             <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">🔑 Groq API Key</p>
             <div className="flex gap-2">
               <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="gsk_..."
-                className="flex-1 bg-gray-800 border border-gray-600 rounded-full px-3 py-2 text-xs text-white placeholder-gray-500 outline-none focus:border-blue-500" />
-              <button onClick={handleSaveApiKey} className="bg-blue-600 hover:bg-blue-500 text-white rounded-full px-4 py-2 text-xs font-bold">Save</button>
+                className="flex-1 bg-gray-800 border border-gray-600 rounded-full px-3 py-2 text-xs text-white placeholder-gray-500 outline-none" />
+              <button onClick={handleSaveApiKey} className="bg-blue-600 text-white rounded-full px-4 py-2 text-xs font-bold">Save</button>
             </div>
-            <p className="text-xs text-gray-500 mt-1">Free key at <a href="https://console.groq.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">console.groq.com</a></p>
+            <p className="text-xs text-gray-500 mt-1">Free key at <a href="https://console.groq.com" target="_blank" rel="noopener noreferrer" className="text-blue-400">console.groq.com</a></p>
           </div>
           <div>
             <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">📘 Mode</p>
             <div className="grid grid-cols-2 gap-2">
               {['conversation', 'grammar', 'vocabulary', 'roleplay'].map(m => (
                 <button key={m} onClick={() => setCurrentMode(m)}
-                  className={`py-1.5 rounded-full text-xs font-medium transition-colors ${currentMode === m ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}>
+                  className={`py-1.5 rounded-full text-xs font-medium ${currentMode === m ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300'}`}>
                   {m.charAt(0).toUpperCase() + m.slice(1)}
                 </button>
               ))}
@@ -411,7 +366,7 @@ export default function TutorPageMediaPipe() {
             <div className="flex gap-2">
               {['beginner', 'intermediate', 'advanced'].map(l => (
                 <button key={l} onClick={() => setCurrentLevel(l)}
-                  className={`flex-1 py-1.5 rounded-full text-xs font-medium transition-colors ${currentLevel === l ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}>
+                  className={`flex-1 py-1.5 rounded-full text-xs font-medium ${currentLevel === l ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300'}`}>
                   {l.charAt(0).toUpperCase() + l.slice(1)}
                 </button>
               ))}
@@ -422,7 +377,7 @@ export default function TutorPageMediaPipe() {
             <div className="flex gap-2">
               {(['mic', 'chat'] as const).map(m => (
                 <button key={m} onClick={() => setInputMode(m)}
-                  className={`flex-1 py-1.5 rounded-full text-xs font-medium transition-colors ${inputMode === m ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}>
+                  className={`flex-1 py-1.5 rounded-full text-xs font-medium ${inputMode === m ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300'}`}>
                   {m === 'mic' ? '🎙️ Mic' : '⌨️ Type'}
                 </button>
               ))}
