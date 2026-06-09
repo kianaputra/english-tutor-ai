@@ -52,28 +52,62 @@ export default function TutorPageMediaPipe() {
 
     const rec = new SR();
     rec.lang = 'en-US';
-    rec.continuous = false;
-    rec.interimResults = false;
+    rec.continuous = true;       // keep listening, don't auto-stop
+    rec.interimResults = true;   // get partial results so we know user is still talking
 
-    rec.onstart = () => {
-      isListeningRef.current = true;
-      setIsListening(true);
-      setStatus('listening');
+    let silenceTimer: ReturnType<typeof setTimeout> | null = null;
+    let accumulatedText = '';
+
+    const clearSilenceTimer = () => {
+      if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
     };
 
-    rec.onresult = (e: any) => {
-      const text = e.results[e.results.length - 1][0].transcript.trim();
+    const submitText = () => {
+      clearSilenceTimer();
+      const text = accumulatedText.trim();
+      accumulatedText = '';
       if (text && !isThinkingRef.current && !isSpeakingRef.current) {
         rec.stop();
         processUserInputRef.current(text);
       }
     };
 
+    rec.onstart = () => {
+      isListeningRef.current = true;
+      accumulatedText = '';
+      setIsListening(true);
+      setStatus('listening');
+    };
+
+    rec.onresult = (e: any) => {
+      if (isSpeakingRef.current) return;
+
+      let interim = '';
+      let final = '';
+
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) {
+          final += e.results[i][0].transcript;
+        } else {
+          interim += e.results[i][0].transcript;
+        }
+      }
+
+      if (final) accumulatedText += ' ' + final;
+
+      // Reset silence timer every time user speaks (interim or final)
+      if (interim || final) {
+        clearSilenceTimer();
+        // Wait 1.5s of silence after last word before submitting
+        silenceTimer = setTimeout(submitText, 1500);
+      }
+    };
+
     rec.onerror = (e: any) => {
+      clearSilenceTimer();
       isListeningRef.current = false;
       setIsListening(false);
       if (e.error === 'no-speech') {
-        // Timeout — restart quietly
         setTimeout(tryStartMic, 300);
       } else {
         setStatus('ready');
@@ -82,9 +116,14 @@ export default function TutorPageMediaPipe() {
     };
 
     rec.onend = () => {
+      clearSilenceTimer();
+      // If we have accumulated text, submit it
+      if (accumulatedText.trim() && !isThinkingRef.current && !isSpeakingRef.current) {
+        processUserInputRef.current(accumulatedText.trim());
+        accumulatedText = '';
+      }
       isListeningRef.current = false;
       setIsListening(false);
-      // Only restart if idle
       setTimeout(tryStartMic, 500);
     };
 
