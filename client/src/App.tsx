@@ -4,13 +4,13 @@ import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
-import TutorPage from "./pages/TutorPage";
+import TutorPageMediaPipe from "./pages/TutorPageMediaPipe";
 
 
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={TutorPage} />
+      <Route path="/" component={TutorPageMediaPipe} />
       <Route path="/404" component={NotFound} />
       {/* Final fallback route */}
       <Route component={NotFound} />
