@@ -3,10 +3,12 @@ import express from "express";
 const app = express();
 app.use(express.json());
 
-// Salin semua routes dari server/index.ts ke sini
+// Pindahkan semua API routes kamu ke sini
 // Contoh:
-app.post("/api/chat", async (req, res) => {
-  // logic chat kamu
+app.get("/api/health", (_req, res) => {
+  res.json({ status: "ok" });
 });
+
+// Tambahkan routes lainnya dari server kamu...
 
 export default app;
