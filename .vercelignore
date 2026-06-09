@@ -4,7 +4,12 @@ node_modules
 README.md
 .env.local
 .env.*.local
-server
-patches
+server/
+patches/
 *.log
 .DS_Store
+.manus-logs/
+dist/
+.next/
+.nuxt/
+.cache/
