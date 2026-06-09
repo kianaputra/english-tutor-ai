@@ -1,7 +1,13 @@
 {
-  "buildCommand": "cd client && pnpm build",
+  "buildCommand": "cd client && pnpm install && pnpm build",
   "outputDirectory": "client/dist",
   "framework": "vite",
-  "installCommand": "pnpm install",
-  "devCommand": "cd client && pnpm dev"
+  "installCommand": "pnpm install --frozen-lockfile",
+  "devCommand": "cd client && pnpm dev",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
 }
