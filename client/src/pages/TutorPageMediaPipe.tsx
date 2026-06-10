@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Menu, Send, X } from 'lucide-react';
+import { Menu, Send, X, Download } from 'lucide-react';
 
 interface Message {
   role: 'user' | 'bot';
@@ -303,6 +303,35 @@ export default function TutorPageMediaPipe() {
     if (manualInput.trim()) { processUserInput(manualInput); setManualInput(''); }
   };
 
+
+  const downloadDocx = () => {
+    if (messages.length === 0) return;
+
+    // Build plain text content
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+    let text = `English Tutoring Session with Ms. Maria\n`;
+    text += `Date: ${dateStr} ${timeStr}\n`;
+    text += `Mode: ${currentMode.charAt(0).toUpperCase() + currentMode.slice(1)} | Level: ${currentLevel.charAt(0).toUpperCase() + currentLevel.slice(1)}\n`;
+    text += `${'='.repeat(50)}\n\n`;
+
+    messages.forEach((msg) => {
+      const speaker = msg.role === 'user' ? 'You' : 'Ms. Maria';
+      text += `[${speaker}]\n${msg.content}\n\n`;
+    });
+
+    // Download as .txt (universally compatible, opens in Word)
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Ms-Maria-Session-${now.toISOString().slice(0,10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="flex w-full h-screen overflow-hidden bg-black">
 
@@ -325,28 +354,39 @@ export default function TutorPageMediaPipe() {
                                         '🔊 Speaking...'}
             </span>
           </div>
-          <button onClick={() => setShowMenu(!showMenu)}
-            className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center shrink-0">
-            {showMenu ? <X className="w-3.5 h-3.5 text-white" /> : <Menu className="w-3.5 h-3.5 text-white" />}
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={downloadDocx}
+              disabled={messages.length === 0}
+              title="Download conversation"
+              className="w-7 h-7 rounded-full bg-white/10 hover:bg-green-500/40 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center shrink-0 transition-colors">
+              <Download className="w-3.5 h-3.5 text-white" />
+            </button>
+            <button onClick={() => setShowMenu(!showMenu)}
+              className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center shrink-0">
+              {showMenu ? <X className="w-3.5 h-3.5 text-white" /> : <Menu className="w-3.5 h-3.5 text-white" />}
+            </button>
+          </div>
         </div>
 
         {/* Messages */}
-        <div ref={chatAreaRef} className="flex-1 overflow-y-auto p-3 flex flex-col gap-3" style={{ minHeight: 0 }}>
+        <div
+          ref={chatAreaRef}
+          className="overflow-y-auto p-3 flex flex-col gap-3"
+          style={{ flex: '1 1 0', minHeight: 0, overflowY: 'auto' }}
+        >
           {messages.length === 0 && (
             <p className="text-white/25 text-xs text-center mt-10">Conversation will appear here...</p>
           )}
           {messages.map((msg, idx) => (
-            <div key={idx} className={`flex flex-col gap-1 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-              {/* Label */}
-              <span className="text-white/30 text-[10px] px-1">
+            <div key={idx} className="flex flex-col gap-1">
+              <span className={`text-[10px] px-1 ${msg.role === 'user' ? 'text-blue-300/60 text-right' : 'text-white/30'}`}>
                 {msg.role === 'user' ? 'You' : 'Ms. Maria'}
               </span>
-              {/* Bubble */}
-              <div className={`w-full px-3 py-2 rounded-2xl text-xs leading-relaxed break-words ${
+              <div className={`w-full px-3 py-2.5 rounded-xl text-xs leading-relaxed break-words whitespace-pre-wrap ${
                 msg.role === 'user'
-                  ? 'bg-blue-600/80 text-white rounded-tr-sm'
-                  : 'bg-white/8 text-white/90 rounded-tl-sm border border-white/10'
+                  ? 'bg-blue-600/80 text-white'
+                  : 'bg-white/8 text-white/85 border border-white/10'
               }`}>
                 {msg.content}
               </div>
