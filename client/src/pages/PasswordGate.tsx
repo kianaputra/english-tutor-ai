@@ -10,7 +10,7 @@ export default function PasswordGate({ onUnlock }: PasswordGateProps) {
   const [shake, setShake] = useState(false);
 
   // Ganti PASSWORD_KAMU dengan password yang kamu inginkan
-  const CORRECT_PASSWORD = '4m4r1sh4s14n';
+  const CORRECT_PASSWORD = '1348234116';
 
   const handleSubmit = () => {
     if (input.trim().toUpperCase() === CORRECT_PASSWORD) {
