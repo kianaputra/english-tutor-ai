@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Menu, Send, X, Download, MessageSquare, MessageSquareOff } from 'lucide-react';
+import { Menu, Send, X, Download, MessageSquare, MessageSquareOff, Mic, MicOff, StopCircle } from 'lucide-react';
 
 interface Message {
   role: 'user' | 'bot';
@@ -14,9 +14,13 @@ export default function TutorPageMediaPipe() {
   const [apiKey, setApiKey] = useState(localStorage.getItem('eng_tutor_groq') || '');
   const [showMenu, setShowMenu] = useState(false);
   const [showChat, setShowChat] = useState(true);
+  const [micEnabled, setMicEnabled] = useState(true);
+  const micEnabledRef = useRef(true);
   const [currentMode, setCurrentMode] = useState('conversation');
   const [currentLevel, setCurrentLevel] = useState('intermediate');
   const [inputMode, setInputMode] = useState<'mic' | 'chat'>('mic');
+  const [micPaused, setMicPaused] = useState(false);
+  const micPausedRef = useRef(false);
   const [manualInput, setManualInput] = useState('');
   const [panelWidth, setPanelWidth] = useState(288);
   const isDraggingRef = useRef(false);
@@ -53,6 +57,7 @@ export default function TutorPageMediaPipe() {
   const currentLevelRef = useRef('intermediate');
 
   useEffect(() => { inputModeRef.current = inputMode; }, [inputMode]);
+  useEffect(() => { micEnabledRef.current = micEnabled; if (!micEnabled) { try { recognitionRef.current?.abort(); } catch(_){} isActiveRef.current = false; setIsListening(false); } else { setTimeout(tryStartMic, 300); } }, [micEnabled]);
   useEffect(() => { apiKeyRef.current = apiKey; }, [apiKey]);
   useEffect(() => { currentModeRef.current = currentMode; }, [currentMode]);
   useEffect(() => { currentLevelRef.current = currentLevel; }, [currentLevel]);
@@ -60,10 +65,35 @@ export default function TutorPageMediaPipe() {
   // Only start mic when truly idle
   const tryStartMic = () => {
     if (inputModeRef.current !== 'mic') return;
-    if (isSpeakingRef.current) return;   // AI is speaking — don't listen
-    if (isListeningRef.current) return;  // already listening
-    if (isThinkingRef.current) return;   // waiting for API
+    if (isSpeakingRef.current) return;
+    if (isListeningRef.current) return;
+    if (isThinkingRef.current) return;
+    if (micPausedRef.current) return;    // user paused mic
     try { recognitionRef.current?.start(); } catch (_) {}
+  };
+
+  const toggleMic = () => {
+    const nowPaused = !micPausedRef.current;
+    micPausedRef.current = nowPaused;
+    setMicPaused(nowPaused);
+    if (nowPaused) {
+      // Pause: stop recognition immediately
+      try { recognitionRef.current?.abort(); } catch (_) {}
+      isListeningRef.current = false;
+      setIsListening(false);
+    } else {
+      // Resume: start listening
+      setTimeout(tryStartMic, 300);
+    }
+  };
+
+  const stopAI = () => {
+    window.speechSynthesis.cancel();
+    isSpeakingRef.current = false;
+    setIsSpeaking(false);
+    setStatus('ready');
+    // Resume mic after stopping AI
+    setTimeout(tryStartMic, 400);
   };
 
   // Setup recognition ONCE
@@ -333,6 +363,15 @@ export default function TutorPageMediaPipe() {
     URL.revokeObjectURL(url);
   };
 
+
+  const stopSpeaking = () => {
+    window.speechSynthesis.cancel();
+    isSpeakingRef.current = false;
+    setIsSpeaking(false);
+    setStatus('ready');
+    setTimeout(tryStartMic, 600);
+  };
+
   return (
     <div className="flex w-full h-screen overflow-hidden bg-black">
 
@@ -404,14 +443,52 @@ export default function TutorPageMediaPipe() {
         </div>
 
         {/* Input */}
-        <div className="p-3 border-t border-white/10 shrink-0">
+        <div className="p-3 border-t border-white/10 shrink-0 flex flex-col gap-2">
+
+          {/* Stop AI button — only shown when AI is speaking */}
+          {isSpeaking && (
+            <button
+              onClick={stopAI}
+              className="w-full flex items-center justify-center gap-2 py-2 rounded-full text-xs font-medium bg-red-500/20 border border-red-400/50 text-red-300 hover:bg-red-500/30 transition-colors animate-pulse"
+            >
+              <Square className="w-3 h-3 fill-current" />
+              Stop Ms. Maria
+            </button>
+          )}
+
           {inputMode === 'mic' ? (
-            <div className={`w-full py-2 rounded-full text-xs font-medium text-center border transition-all ${
-              isListening ? 'border-orange-400/60 bg-orange-500/15 text-orange-300' :
-              isSpeaking  ? 'border-blue-400/60 bg-blue-500/15 text-blue-300' :
-                            'border-white/15 bg-white/5 text-white/40'
-            }`}>
-              {isSpeaking ? '🔊 Ms. Maria speaking...' : isListening ? '🎤 Listening...' : '🎙️ Mic on — speak anytime'}
+            <div className="flex items-center gap-2">
+              {/* Mic toggle button */}
+              <button
+                onClick={toggleMic}
+                disabled={isSpeaking}
+                title={micPaused ? 'Resume microphone' : 'Pause microphone'}
+                className={`w-10 h-8 rounded-full flex items-center justify-center shrink-0 transition-all border ${
+                  isSpeaking
+                    ? 'opacity-30 cursor-not-allowed border-white/10 bg-white/5'
+                    : micPaused
+                      ? 'bg-red-500/20 border-red-400/50 hover:bg-red-500/30'
+                      : 'bg-emerald-500/20 border-emerald-400/50 hover:bg-emerald-500/30'
+                }`}
+              >
+                {micPaused
+                  ? <MicOff className="w-3.5 h-3.5 text-red-300" />
+                  : <Mic className="w-3.5 h-3.5 text-emerald-300" />
+                }
+              </button>
+
+              {/* Status indicator */}
+              <div className={`flex-1 py-2 rounded-full text-xs font-medium text-center border transition-all ${
+                isListening ? 'border-orange-400/60 bg-orange-500/15 text-orange-300' :
+                isSpeaking  ? 'border-blue-400/60 bg-blue-500/15 text-blue-300' :
+                micPaused   ? 'border-red-400/30 bg-red-500/10 text-red-300/60' :
+                              'border-white/15 bg-white/5 text-white/40'
+              }`}>
+                {isSpeaking ? '🔊 Speaking...' :
+                 isListening ? '🎤 Listening...' :
+                 micPaused ? '⏸ Mic paused' :
+                 '🎙️ Mic on'}
+              </div>
             </div>
           ) : (
             <div className="flex gap-2">
