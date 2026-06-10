@@ -332,16 +332,21 @@ export default function TutorPageMediaPipe() {
         </div>
 
         {/* Messages */}
-        <div ref={chatAreaRef} className="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
+        <div ref={chatAreaRef} className="flex-1 overflow-y-auto p-3 flex flex-col gap-3" style={{ minHeight: 0 }}>
           {messages.length === 0 && (
             <p className="text-white/25 text-xs text-center mt-10">Conversation will appear here...</p>
           )}
           {messages.map((msg, idx) => (
-            <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[90%] px-3 py-2 rounded-2xl text-xs leading-relaxed ${
+            <div key={idx} className={`flex flex-col gap-1 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+              {/* Label */}
+              <span className="text-white/30 text-[10px] px-1">
+                {msg.role === 'user' ? 'You' : 'Ms. Maria'}
+              </span>
+              {/* Bubble */}
+              <div className={`w-full px-3 py-2 rounded-2xl text-xs leading-relaxed break-words ${
                 msg.role === 'user'
-                  ? 'bg-blue-600 text-white rounded-br-sm'
-                  : 'bg-white/10 text-white/90 rounded-bl-sm border border-white/10'
+                  ? 'bg-blue-600/80 text-white rounded-tr-sm'
+                  : 'bg-white/8 text-white/90 rounded-tl-sm border border-white/10'
               }`}>
                 {msg.content}
               </div>
