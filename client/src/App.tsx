@@ -5,33 +5,34 @@ import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import TutorPageMediaPipe from "./pages/TutorPageMediaPipe";
-
+import PasswordGate from "./pages/PasswordGate";
+import { useState, useEffect } from "react";
 
 function Router() {
   return (
     <Switch>
       <Route path="/" component={TutorPageMediaPipe} />
       <Route path="/404" component={NotFound} />
-      {/* Final fallback route */}
       <Route component={NotFound} />
     </Switch>
   );
 }
 
-// NOTE: About Theme
-// - First choose a default theme according to your design style (dark or light bg), than change color palette in index.css
-//   to keep consistent foreground/background color across components
-// - If you want to make theme switchable, pass `switchable` ThemeProvider and use `useTheme` hook
-
 function App() {
+  const [unlocked, setUnlocked] = useState(false);
+
+  useEffect(() => {
+    // Check if already unlocked in this session
+    const saved = localStorage.getItem('msmaria_unlocked');
+    if (saved === 'true') setUnlocked(true);
+  }, []);
+
   return (
     <ErrorBoundary>
-      <ThemeProvider
-        defaultTheme="dark"
-      >
+      <ThemeProvider defaultTheme="dark">
         <TooltipProvider>
           <Toaster />
-          <Router />
+          {unlocked ? <Router /> : <PasswordGate onUnlock={() => setUnlocked(true)} />}
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>
