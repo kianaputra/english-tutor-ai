@@ -10,7 +10,7 @@ export default function PasswordGate({ onUnlock }: PasswordGateProps) {
   const [shake, setShake] = useState(false);
 
   // Ganti PASSWORD_KAMU dengan password yang kamu inginkan
-  const CORRECT_PASSWORD = 'MSMARIA2025';
+  const CORRECT_PASSWORD = '4m4r1sh4s14n';
 
   const handleSubmit = () => {
     if (input.trim().toUpperCase() === CORRECT_PASSWORD) {
@@ -93,7 +93,7 @@ export default function PasswordGate({ onUnlock }: PasswordGateProps) {
           <p className="text-white/30 text-xs text-center mt-4">
             Don't have access yet?{' '}
             <a
-              href="https://lynk.id/YOUR_LYNK_ID"
+              href="https://lynk.id/amarishasian"
               target="_blank"
               rel="noopener noreferrer"
               className="text-blue-400 hover:text-blue-300 underline"
