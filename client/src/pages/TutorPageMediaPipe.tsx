@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Menu, Send, X, Download } from 'lucide-react';
+import { Menu, Send, X, Download, MessageSquare, MessageSquareOff } from 'lucide-react';
 
 interface Message {
   role: 'user' | 'bot';
@@ -13,6 +13,7 @@ export default function TutorPageMediaPipe() {
   const [status, setStatus] = useState<'ready' | 'listening' | 'thinking' | 'speaking'>('ready');
   const [apiKey, setApiKey] = useState(localStorage.getItem('eng_tutor_groq') || '');
   const [showMenu, setShowMenu] = useState(false);
+  const [showChat, setShowChat] = useState(true);
   const [currentMode, setCurrentMode] = useState('conversation');
   const [currentLevel, setCurrentLevel] = useState('intermediate');
   const [inputMode, setInputMode] = useState<'mic' | 'chat'>('mic');
@@ -362,6 +363,14 @@ export default function TutorPageMediaPipe() {
               className="w-7 h-7 rounded-full bg-white/10 hover:bg-green-500/40 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center shrink-0 transition-colors">
               <Download className="w-3.5 h-3.5 text-white" />
             </button>
+            <button
+              onClick={() => setShowChat(!showChat)}
+              title={showChat ? 'Hide conversation' : 'Show conversation'}
+              className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 transition-colors ${showChat ? 'bg-blue-500/40 hover:bg-blue-500/60' : 'bg-white/10 hover:bg-white/20'}`}>
+              {showChat
+                ? <MessageSquare className="w-3.5 h-3.5 text-blue-300" />
+                : <MessageSquareOff className="w-3.5 h-3.5 text-white/50" />}
+            </button>
             <button onClick={() => setShowMenu(!showMenu)}
               className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center shrink-0">
               {showMenu ? <X className="w-3.5 h-3.5 text-white" /> : <Menu className="w-3.5 h-3.5 text-white" />}
@@ -373,7 +382,7 @@ export default function TutorPageMediaPipe() {
         <div
           ref={chatAreaRef}
           className="overflow-y-auto p-3 flex flex-col gap-3"
-          style={{ flex: '1 1 0', minHeight: 0, overflowY: 'auto' }}
+          style={{ flex: '1 1 0', minHeight: 0, overflowY: 'auto', display: showChat ? 'flex' : 'none' }}
         >
           {messages.length === 0 && (
             <p className="text-white/25 text-xs text-center mt-10">Conversation will appear here...</p>
