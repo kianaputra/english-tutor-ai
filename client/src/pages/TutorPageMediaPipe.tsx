@@ -17,8 +17,28 @@ export default function TutorPageMediaPipe() {
   const [currentLevel, setCurrentLevel] = useState('intermediate');
   const [inputMode, setInputMode] = useState<'mic' | 'chat'>('mic');
   const [manualInput, setManualInput] = useState('');
+  const [panelWidth, setPanelWidth] = useState(288);
+  const isDraggingRef = useRef(false);
 
   const chatAreaRef = useRef<HTMLDivElement>(null);
+
+  const handleDragStart = (e: React.MouseEvent) => {
+    isDraggingRef.current = true;
+    const startX = e.clientX;
+    const startWidth = panelWidth;
+    const onMove = (ev: MouseEvent) => {
+      if (!isDraggingRef.current) return;
+      const newWidth = Math.min(600, Math.max(180, startWidth + ev.clientX - startX));
+      setPanelWidth(newWidth);
+    };
+    const onUp = () => {
+      isDraggingRef.current = false;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
   const recognitionRef = useRef<any>(null);
 
   // Single source of truth via refs
@@ -287,7 +307,7 @@ export default function TutorPageMediaPipe() {
     <div className="flex w-full h-screen overflow-hidden bg-black">
 
       {/* LEFT: Chat panel */}
-      <div className="relative z-10 flex flex-col w-72 h-full shrink-0 bg-black/80 backdrop-blur-md border-r border-white/10">
+      <div className="relative z-10 flex flex-col h-full shrink-0 bg-black/80 backdrop-blur-md" style={{ width: panelWidth }}>
 
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 shrink-0">
@@ -354,6 +374,13 @@ export default function TutorPageMediaPipe() {
           )}
         </div>
       </div>
+
+      {/* Drag handle */}
+      <div
+        onMouseDown={handleDragStart}
+        className="w-1 h-full bg-white/10 hover:bg-blue-400/60 cursor-col-resize transition-colors shrink-0 z-20"
+        title="Drag to resize"
+      />
 
       {/* RIGHT: Teacher image */}
       <div className="relative flex-1 h-full">
