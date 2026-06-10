@@ -6,7 +6,10 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import TutorPageMediaPipe from "./pages/TutorPageMediaPipe";
 import PasswordGate from "./pages/PasswordGate";
+import ApiKeySetup from "./pages/ApiKeySetup";
 import { useState, useEffect } from "react";
+
+type Stage = 'password' | 'apikey' | 'app';
 
 function Router() {
   return (
@@ -19,20 +22,34 @@ function Router() {
 }
 
 function App() {
-  const [unlocked, setUnlocked] = useState(false);
+  const [stage, setStage] = useState<Stage>('password');
 
   useEffect(() => {
-    // Check if already unlocked in this session
-    const saved = localStorage.getItem('msmaria_unlocked');
-    if (saved === 'true') setUnlocked(true);
+    const unlocked = localStorage.getItem('msmaria_unlocked') === 'true';
+    const hasKey = !!localStorage.getItem('eng_tutor_groq');
+
+    if (unlocked && hasKey) setStage('app');
+    else if (unlocked) setStage('apikey');
+    else setStage('password');
   }, []);
+
+  const handleUnlocked = () => {
+    const hasKey = !!localStorage.getItem('eng_tutor_groq');
+    setStage(hasKey ? 'app' : 'apikey');
+  };
+
+  const handleApiKeySet = (_key: string) => {
+    setStage('app');
+  };
 
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="dark">
         <TooltipProvider>
           <Toaster />
-          {unlocked ? <Router /> : <PasswordGate onUnlock={() => setUnlocked(true)} />}
+          {stage === 'password' && <PasswordGate onUnlock={handleUnlocked} />}
+          {stage === 'apikey'  && <ApiKeySetup onComplete={handleApiKeySet} />}
+          {stage === 'app'     && <Router />}
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>
