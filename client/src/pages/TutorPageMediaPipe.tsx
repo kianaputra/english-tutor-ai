@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Menu, Send, X, Download, MessageSquare, MessageSquareOff, Mic, MicOff, StopCircle } from 'lucide-react';
+import { Menu, Send, X, Download, MessageSquare, Mic, MicOff, Square, EyeOff } from 'lucide-react';
 
 interface Message {
   role: 'user' | 'bot';
@@ -404,11 +404,11 @@ export default function TutorPageMediaPipe() {
             </button>
             <button
               onClick={() => setShowChat(!showChat)}
-              title={showChat ? 'Hide conversation' : 'Show conversation'}
+              title={showChat ? 'Hide chat' : 'Show chat'}
               className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 transition-colors ${showChat ? 'bg-blue-500/40 hover:bg-blue-500/60' : 'bg-white/10 hover:bg-white/20'}`}>
               {showChat
                 ? <MessageSquare className="w-3.5 h-3.5 text-blue-300" />
-                : <MessageSquareOff className="w-3.5 h-3.5 text-white/50" />}
+                : <EyeOff className="w-3.5 h-3.5 text-white/50" />}
             </button>
             <button onClick={() => setShowMenu(!showMenu)}
               className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center shrink-0">
