@@ -515,10 +515,16 @@ export default function TutorPageMediaPipe() {
 
       {/* RIGHT: Teacher image */}
       <div className="relative flex-1 h-full">
-        <img src="/teacher.png" alt="Ms. Maria"
+        <video
+          autoPlay
+          loop
+          muted={isSpeaking ? false : true}
+          playsInline
           className="absolute inset-0 w-full h-full object-cover"
           style={{ objectPosition: '50% 10%' }}
-        />
+        >
+          <source src="/teacher-video.mp4" type="video/mp4" />
+        </video>
         <div className="absolute bottom-5 left-1/2 -translate-x-1/2 bg-black/50 backdrop-blur-md rounded-full px-5 py-1.5 border border-white/10">
           <span className="text-sm font-medium text-white">Ms. Maria · English Tutor AI</span>
         </div>
