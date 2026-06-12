@@ -128,13 +128,11 @@ export default function TutorPageMediaPipe() {
       }
       if (final) {
         accumulated += ' ' + final;
-        // Final chunk received — submit relatively quickly
+      }
+      if (interim || final) {
+        // Reset the 10-second silence timer every time user speaks
         clearTimer();
-        silenceTimer = setTimeout(submit, 700);
-      } else if (interim) {
-        // Still speaking — extend wait so we don't cut them off
-        clearTimer();
-        silenceTimer = setTimeout(submit, 1400);
+        silenceTimer = setTimeout(submit, 10000);
       }
     };
 
@@ -146,11 +144,20 @@ export default function TutorPageMediaPipe() {
 
     rec.onend = () => {
       clearTimer();
-      if (accumulated.trim() && !isThinkingRef.current && !isSpeakingRef.current) {
-        processUserInputRef.current(accumulated.trim()); accumulated = '';
-      }
       isActiveRef.current = false; setIsListening(false);
-      setTimeout(tryStartMic, 300);
+      // If we still have accumulated text and the user hasn't been idle long,
+      // browser likely auto-stopped due to time limit — restart and keep accumulating
+      if (accumulated.trim() && !isThinkingRef.current && !isSpeakingRef.current) {
+        setTimeout(() => {
+          if (micEnabledRef.current && !isSpeakingRef.current && !isThinkingRef.current) {
+            try { rec.start(); } catch (_) {}
+          }
+        }, 100);
+        // Also keep the 10s silence timer running in case user is truly done
+        silenceTimer = setTimeout(submit, 10000);
+      } else {
+        setTimeout(tryStartMic, 300);
+      }
     };
 
     recognitionRef.current = rec;
