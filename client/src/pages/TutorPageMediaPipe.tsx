@@ -46,8 +46,10 @@ export default function TutorPageMediaPipe() {
     micEnabledRef.current = micEnabled;
     if (!micEnabled) {
       try { recognitionRef.current?.abort(); } catch (_) {}
-      isActiveRef.current = false; setIsListening(false);
-    } else { setTimeout(tryStartMic, 300); }
+      isActiveRef.current = false;
+      setIsListening(false);
+    }
+    // When mic turned on, user must press button to start speaking
   }, [micEnabled]);
 
   // Detect mobile/desktop and resize
@@ -83,133 +85,61 @@ export default function TutorPageMediaPipe() {
     window.addEventListener('mouseup', onUp);
   };
 
-  const tryStartMic = () => {
-    if (inputModeRef.current !== 'mic') return;
+  const startMic = () => {
     if (!micEnabledRef.current) return;
     if (isSpeakingRef.current) return;
     if (isActiveRef.current) return;
     if (isThinkingRef.current) return;
-    if ((window as any).__startRec) {
-      (window as any).__startRec();
-    } else {
-      try { recognitionRef.current?.start(); } catch (_) {}
-    }
+    if (!recognitionRef.current) return;
+    try { recognitionRef.current.start(); } catch (_) {}
   };
 
-  // Setup speech recognition ONCE
+  const stopMic = () => {
+    try { recognitionRef.current?.stop(); } catch (_) {}
+  };
+
+  // Keep tryStartMic for compatibility
+  const tryStartMic = startMic;
+
+  // Speech recognition — manual start/stop, no auto-loop
   useEffect(() => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) return;
+    if (!SR) { recognitionRef.current = null; return; }
 
-    let silenceTimer: ReturnType<typeof setTimeout> | null = null;
-    let restartTimer: ReturnType<typeof setTimeout> | null = null;
-    let accumulated = '';
-    let isStarting = false; // prevent double-start
+    const rec = new SR();
+    rec.lang = 'en-US';
+    rec.continuous = false;
+    rec.interimResults = false; // only final results — most stable
 
-    const clearTimers = () => {
-      if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
-      if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
+    rec.onstart = () => {
+      isActiveRef.current = true;
+      setIsListening(true);
+      setStatus('listening');
     };
 
-    const createRec = () => {
-      const rec = new SR();
-      rec.lang = 'en-US';
-      rec.continuous = false;  // false = more stable across all browsers
-      rec.interimResults = true;
-      return rec;
-    };
-
-    const submit = () => {
-      clearTimers();
-      const text = accumulated.trim();
-      accumulated = '';
-      if (text && !isThinkingRef.current && !isSpeakingRef.current) {
-        processUserInputRef.current(text);
-      }
-    };
-
-    const startRec = () => {
-      if (!micEnabledRef.current) return;
+    rec.onresult = (e: any) => {
       if (isSpeakingRef.current) return;
-      if (isThinkingRef.current) return;
-      if (isActiveRef.current) return;
-      if (isStarting) return;
-
-      isStarting = true;
-      const rec = createRec();
-      recognitionRef.current = rec;
-
-      rec.onstart = () => {
-        isStarting = false;
-        isActiveRef.current = true;
-        setIsListening(true);
-        setStatus('listening');
-      };
-
-      rec.onresult = (e: any) => {
-        if (isSpeakingRef.current) return;
-        let final = '', interim = '';
-        for (let i = e.resultIndex; i < e.results.length; i++) {
-          if (e.results[i].isFinal) final += e.results[i][0].transcript;
-          else interim += e.results[i][0].transcript;
-        }
-        if (final) accumulated += ' ' + final;
-
-        // Reset 10-second silence timer on any speech activity
-        if (interim || final) {
-          clearTimers();
-          silenceTimer = setTimeout(submit, 10000);
-        }
-      };
-
-      rec.onerror = (e: any) => {
-        isStarting = false;
-        isActiveRef.current = false;
-        setIsListening(false);
-        // Only restart on non-fatal errors
-        if (e.error === 'no-speech' || e.error === 'audio-capture') {
-          restartTimer = setTimeout(startRec, 500);
-        } else if (e.error !== 'aborted') {
-          setStatus('ready');
-          restartTimer = setTimeout(startRec, 1000);
-        }
-      };
-
-      rec.onend = () => {
-        isStarting = false;
-        isActiveRef.current = false;
-        setIsListening(false);
-
-        // If user was mid-sentence (has accumulated text), restart immediately
-        // to keep capturing — 10s timer still running
-        if (accumulated.trim() && !isThinkingRef.current && !isSpeakingRef.current) {
-          restartTimer = setTimeout(startRec, 150);
-        } else if (!isThinkingRef.current && !isSpeakingRef.current) {
-          // Nothing accumulated — submit what we have (if any) and go idle
-          if (accumulated.trim()) submit();
-          // Don't auto-restart — wait for mic to be enabled or AI to finish
-          setStatus('ready');
-          restartTimer = setTimeout(startRec, 500);
-        }
-      };
-
-      try { rec.start(); } catch (_) { isStarting = false; }
+      let text = '';
+      for (let i = 0; i < e.results.length; i++) {
+        if (e.results[i].isFinal) text += e.results[i][0].transcript;
+      }
+      if (text.trim()) processUserInputRef.current(text.trim());
     };
 
-    // Override tryStartMic to use our new startRec
-    recognitionRef.current = { start: startRec, abort: () => {
-      clearTimers();
-      try { if (recognitionRef.current?.abort) recognitionRef.current.abort(); } catch (_) {}
-      isActiveRef.current = false; isStarting = false;
-    }};
-
-    // Store startRec for tryStartMic to call
-    (window as any).__startRec = startRec;
-
-    return () => {
-      clearTimers();
-      try { recognitionRef.current?.abort(); } catch (_) {}
+    rec.onerror = () => {
+      isActiveRef.current = false;
+      setIsListening(false);
+      setStatus('ready');
     };
+
+    rec.onend = () => {
+      isActiveRef.current = false;
+      setIsListening(false);
+      if (!isSpeakingRef.current && !isThinkingRef.current) setStatus('ready');
+    };
+
+    recognitionRef.current = rec;
+    return () => { try { rec.abort(); } catch (_) {} };
   }, []);
 
   // Greeting on load
@@ -252,14 +182,14 @@ export default function TutorPageMediaPipe() {
     applyVoice();
     if (!window.speechSynthesis.getVoices().length) window.speechSynthesis.onvoiceschanged = applyVoice;
 
-    utt.onend = () => { isSpeakingRef.current = false; setIsSpeaking(false); setStatus('ready'); setTimeout(tryStartMic, 400); };
-    utt.onerror = () => { isSpeakingRef.current = false; setIsSpeaking(false); setStatus('ready'); setTimeout(tryStartMic, 400); };
+    utt.onend = () => { isSpeakingRef.current = false; setIsSpeaking(false); setStatus('ready'); };
+    utt.onerror = () => { isSpeakingRef.current = false; setIsSpeaking(false); setStatus('ready'); };
     window.speechSynthesis.speak(utt);
   };
 
   const stopSpeaking = () => {
     window.speechSynthesis.cancel();
-    isSpeakingRef.current = false; setIsSpeaking(false); setStatus('ready'); setTimeout(tryStartMic, 300);
+    isSpeakingRef.current = false; setIsSpeaking(false); setStatus('ready');
   };
 
   const callGroqAI = async (userText: string): Promise<string> => {
@@ -303,7 +233,7 @@ export default function TutorPageMediaPipe() {
       addMessage('bot', reply); speakNatural(reply);
     } catch (err) {
       addMessage('bot', `⚠️ ${err instanceof Error ? err.message : 'Unknown error'}`);
-      setStatus('ready'); setTimeout(tryStartMic, 400);
+      setStatus('ready');
     } finally { isThinkingRef.current = false; }
   };
 
@@ -395,25 +325,31 @@ export default function TutorPageMediaPipe() {
       {/* Input */}
       <div className="p-3 border-t border-white/10 shrink-0 flex flex-col gap-2">
         {inputMode === 'mic' ? (
-          <div className="flex gap-2 items-center">
-            <button onClick={() => setMicEnabled(v => !v)}
-              className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 border transition-all ${
-                micEnabled && isListening ? 'bg-orange-500/30 border-orange-400/60 animate-pulse' :
-                micEnabled ? 'bg-green-500/20 border-green-400/40' : 'bg-white/5 border-white/15'
+          <div className="flex flex-col gap-2">
+            {/* Main mic button — tap to speak */}
+            <button
+              onMouseDown={startMic}
+              onTouchStart={(e) => { e.preventDefault(); startMic(); }}
+              onClick={isListening ? stopMic : startMic}
+              disabled={isSpeaking}
+              className={`w-full py-3 rounded-full text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
+                isListening
+                  ? 'bg-orange-500 text-white shadow-lg shadow-orange-900/40 scale-105'
+                  : isSpeaking
+                    ? 'bg-blue-600/40 text-blue-300 cursor-not-allowed'
+                    : 'bg-white/10 hover:bg-white/20 text-white border border-white/20'
               }`}>
-              {micEnabled ? <Mic className={`w-4 h-4 ${isListening ? 'text-orange-300' : 'text-green-400'}`} /> : <MicOff className="w-4 h-4 text-white/30" />}
+              {isListening
+                ? <><Mic className="w-4 h-4 animate-pulse" /> Mendengarkan... (ketuk untuk selesai)</>
+                : isSpeaking
+                  ? <><span className="animate-pulse">🔊</span> Ms. Maria berbicara...</>
+                  : <><Mic className="w-4 h-4" /> Ketuk untuk bicara</>}
             </button>
-            <div className={`flex-1 py-2 rounded-full text-xs font-medium text-center border transition-all ${
-              isSpeaking ? 'border-blue-400/60 bg-blue-500/15 text-blue-300' :
-              isListening ? 'border-orange-400/60 bg-orange-500/15 text-orange-300' :
-              micEnabled ? 'border-green-400/30 bg-green-500/10 text-green-300/70' :
-              'border-white/15 bg-white/5 text-white/30'
-            }`}>
-              {isSpeaking ? '🔊 Speaking...' : isListening ? '🎤 Listening...' : micEnabled ? '🎙️ Mic on' : '🔇 Mic off'}
-            </div>
+            {/* Stop AI button */}
             {isSpeaking && (
-              <button onClick={stopSpeaking} className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 bg-red-500/20 border border-red-400/50 hover:bg-red-500/40">
-                <Square className="w-4 h-4 text-red-400 fill-red-400" />
+              <button onClick={stopSpeaking}
+                className="w-full py-2 rounded-full text-xs font-medium flex items-center justify-center gap-2 bg-red-500/20 border border-red-400/50 hover:bg-red-500/40 text-red-300">
+                <Square className="w-3 h-3 fill-red-400" /> Hentikan Ms. Maria
               </button>
             )}
           </div>
@@ -469,16 +405,27 @@ export default function TutorPageMediaPipe() {
 
         {/* Mobile: floating mic & stop controls */}
         {isMobile && (
-          <div className="absolute bottom-16 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3">
-            <button onClick={() => setMicEnabled(v => !v)}
-              className={`w-12 h-12 rounded-full flex items-center justify-center border-2 transition-all ${
-                micEnabled && isListening ? 'bg-orange-500/40 border-orange-400 animate-pulse' :
-                micEnabled ? 'bg-green-500/20 border-green-400/60' : 'bg-black/60 border-white/20'
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3">
+            <button
+              onClick={isListening ? stopMic : startMic}
+              onTouchStart={(e) => { e.preventDefault(); isListening ? stopMic() : startMic(); }}
+              disabled={isSpeaking}
+              className={`px-6 h-12 rounded-full flex items-center gap-2 border-2 transition-all text-sm font-semibold ${
+                isListening
+                  ? 'bg-orange-500 border-orange-400 text-white animate-pulse'
+                  : isSpeaking
+                    ? 'bg-black/60 border-blue-400/40 text-blue-300 cursor-not-allowed'
+                    : 'bg-black/70 border-white/30 text-white backdrop-blur-md'
               }`}>
-              {micEnabled ? <Mic className={`w-5 h-5 ${isListening ? 'text-orange-300' : 'text-green-400'}`} /> : <MicOff className="w-5 h-5 text-white/40" />}
+              {isListening
+                ? <><Mic className="w-5 h-5" /> Selesai</>
+                : isSpeaking
+                  ? <><span>🔊</span> Berbicara...</>
+                  : <><Mic className="w-5 h-5" /> Bicara</>}
             </button>
             {isSpeaking && (
-              <button onClick={stopSpeaking} className="w-12 h-12 rounded-full bg-red-500/30 border-2 border-red-400/60 flex items-center justify-center">
+              <button onClick={stopSpeaking}
+                className="w-12 h-12 rounded-full bg-red-500/30 border-2 border-red-400/60 flex items-center justify-center">
                 <Square className="w-5 h-5 text-red-400 fill-red-400" />
               </button>
             )}
