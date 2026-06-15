@@ -89,72 +89,127 @@ export default function TutorPageMediaPipe() {
     if (isSpeakingRef.current) return;
     if (isActiveRef.current) return;
     if (isThinkingRef.current) return;
-    try { recognitionRef.current?.start(); } catch (_) {}
+    if ((window as any).__startRec) {
+      (window as any).__startRec();
+    } else {
+      try { recognitionRef.current?.start(); } catch (_) {}
+    }
   };
 
-  // Setup speech recognition ONCE — more responsive timing
+  // Setup speech recognition ONCE
   useEffect(() => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) return;
 
-    const rec = new SR();
-    rec.lang = 'en-US';
-    rec.continuous = true;
-    rec.interimResults = true;
-
     let silenceTimer: ReturnType<typeof setTimeout> | null = null;
+    let restartTimer: ReturnType<typeof setTimeout> | null = null;
     let accumulated = '';
+    let isStarting = false; // prevent double-start
 
-    const clearTimer = () => { if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; } };
+    const clearTimers = () => {
+      if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
+      if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
+    };
+
+    const createRec = () => {
+      const rec = new SR();
+      rec.lang = 'en-US';
+      rec.continuous = false;  // false = more stable across all browsers
+      rec.interimResults = true;
+      return rec;
+    };
 
     const submit = () => {
-      clearTimer();
+      clearTimers();
       const text = accumulated.trim();
       accumulated = '';
       if (text && !isThinkingRef.current && !isSpeakingRef.current) {
-        rec.stop();
         processUserInputRef.current(text);
       }
     };
 
-    rec.onstart = () => { isActiveRef.current = true; accumulated = ''; setIsListening(true); setStatus('listening'); };
-
-    rec.onresult = (e: any) => {
+    const startRec = () => {
+      if (!micEnabledRef.current) return;
       if (isSpeakingRef.current) return;
-      let final = '', interim = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) final += e.results[i][0].transcript;
-        else interim += e.results[i][0].transcript;
-      }
-      if (final) {
-        accumulated += ' ' + final;
-        // Final chunk received — submit relatively quickly
-        clearTimer();
-        silenceTimer = setTimeout(submit, 700);
-      } else if (interim) {
-        // Still speaking — extend wait so we don't cut them off
-        clearTimer();
-        silenceTimer = setTimeout(submit, 1400);
-      }
+      if (isThinkingRef.current) return;
+      if (isActiveRef.current) return;
+      if (isStarting) return;
+
+      isStarting = true;
+      const rec = createRec();
+      recognitionRef.current = rec;
+
+      rec.onstart = () => {
+        isStarting = false;
+        isActiveRef.current = true;
+        setIsListening(true);
+        setStatus('listening');
+      };
+
+      rec.onresult = (e: any) => {
+        if (isSpeakingRef.current) return;
+        let final = '', interim = '';
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          if (e.results[i].isFinal) final += e.results[i][0].transcript;
+          else interim += e.results[i][0].transcript;
+        }
+        if (final) accumulated += ' ' + final;
+
+        // Reset 10-second silence timer on any speech activity
+        if (interim || final) {
+          clearTimers();
+          silenceTimer = setTimeout(submit, 10000);
+        }
+      };
+
+      rec.onerror = (e: any) => {
+        isStarting = false;
+        isActiveRef.current = false;
+        setIsListening(false);
+        // Only restart on non-fatal errors
+        if (e.error === 'no-speech' || e.error === 'audio-capture') {
+          restartTimer = setTimeout(startRec, 500);
+        } else if (e.error !== 'aborted') {
+          setStatus('ready');
+          restartTimer = setTimeout(startRec, 1000);
+        }
+      };
+
+      rec.onend = () => {
+        isStarting = false;
+        isActiveRef.current = false;
+        setIsListening(false);
+
+        // If user was mid-sentence (has accumulated text), restart immediately
+        // to keep capturing — 10s timer still running
+        if (accumulated.trim() && !isThinkingRef.current && !isSpeakingRef.current) {
+          restartTimer = setTimeout(startRec, 150);
+        } else if (!isThinkingRef.current && !isSpeakingRef.current) {
+          // Nothing accumulated — submit what we have (if any) and go idle
+          if (accumulated.trim()) submit();
+          // Don't auto-restart — wait for mic to be enabled or AI to finish
+          setStatus('ready');
+          restartTimer = setTimeout(startRec, 500);
+        }
+      };
+
+      try { rec.start(); } catch (_) { isStarting = false; }
     };
 
-    rec.onerror = (e: any) => {
-      clearTimer(); isActiveRef.current = false; setIsListening(false);
-      if (e.error === 'no-speech') setTimeout(tryStartMic, 200);
-      else { setStatus('ready'); setTimeout(tryStartMic, 600); }
-    };
+    // Override tryStartMic to use our new startRec
+    recognitionRef.current = { start: startRec, abort: () => {
+      clearTimers();
+      try { if (recognitionRef.current?.abort) recognitionRef.current.abort(); } catch (_) {}
+      isActiveRef.current = false; isStarting = false;
+    }};
 
-    rec.onend = () => {
-      clearTimer();
-      if (accumulated.trim() && !isThinkingRef.current && !isSpeakingRef.current) {
-        processUserInputRef.current(accumulated.trim()); accumulated = '';
-      }
-      isActiveRef.current = false; setIsListening(false);
-      setTimeout(tryStartMic, 300);
-    };
+    // Store startRec for tryStartMic to call
+    (window as any).__startRec = startRec;
 
-    recognitionRef.current = rec;
-    return () => { try { rec.abort(); } catch (_) {} };
+    return () => {
+      clearTimers();
+      try { recognitionRef.current?.abort(); } catch (_) {}
+    };
   }, []);
 
   // Greeting on load
