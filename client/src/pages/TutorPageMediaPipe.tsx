@@ -500,63 +500,18 @@ export default function TutorPageMediaPipe() {
       </div>
 
       <div className="p-3 border-t border-white/10 shrink-0 flex flex-col gap-2">
-        <div className="p-3 border-t border-white/10 shrink-0 flex flex-col gap-3">
-  {/* Bagian Status dan Tombol Mikrofon tetap ada */}
-  <div className="text-center text-[11px] text-white/50">
-    {isAutoListen ? (
-      isListening ? '🎤 Listening... Speak now' : 
-      isSpeaking ? '🔊 Ms. Maria is speaking...' :
-      status === 'thinking' ? '💭 Thinking...' :
-      '✅ Auto-listen: ON'
-    ) : (
-      '⏸️ Auto-listen: OFF'
-    )}
-  </div>
-  
-  <div className="flex gap-2">
-    <button
-      onClick={handleMicPress}
-      disabled={isSpeaking || status === 'thinking'}
-      className={`px-4 rounded-full text-xs font-semibold transition-all flex items-center justify-center gap-2 shrink-0 ${
-        isListening
-          ? 'bg-orange-500 text-white animate-pulse'
-          : isSpeaking || status === 'thinking'
-            ? 'bg-white/5 text-white/30 cursor-not-allowed border border-white/10'
-            : isAutoListen
-              ? 'bg-green-600 text-white'
-              : 'bg-blue-600 text-white'
-      }`}
-    >
-      <Mic className="w-3.5 h-3.5" />
-      {isListening ? 'Stop' : 'Mic'}
-    </button>
-
-    {/* Input Teks sekarang selalu siap di samping tombol Mic */}
-    <input
-      type="text"
-      value={manualInput}
-      onChange={e => setManualInput(e.target.value)}
-      onKeyDown={e => e.key === 'Enter' && handleSendManual()}
-      placeholder="Type or speak in English..."
-      className="flex-1 bg-white/10 border border-white/15 rounded-full px-3 py-1.5 text-xs text-white placeholder-white/30 outline-none focus:border-blue-400 min-w-0"
-    />
-    <button onClick={handleSendManual}
-      className="w-7 h-7 bg-blue-600 hover:bg-blue-500 rounded-full flex items-center justify-center shrink-0 self-center">
-      <Send className="w-3 h-3 text-white" />
-    </button>
-  </div>
-
-  {isSpeaking && (
-    <button onClick={stopSpeaking}
-      className="w-full py-1.5 rounded-full text-[11px] font-medium flex items-center justify-center gap-2 bg-red-500/20 border border-red-400/50 hover:bg-red-500/40 text-red-300">
-      <Square className="w-2.5 h-2.5 fill-red-300" /> Stop Speaking
-    </button>
-  )}
-
-  {micError && (
-    <p className="text-red-400 text-[11px] text-center px-2">{micError}</p>
-  )}
-</div>
+        {inputMode === 'mic' ? (
+          <>
+            <div className="text-center text-xs text-white/50">
+              {isAutoListen ? (
+                isListening ? '🎤 Listening... Speak now' : 
+                isSpeaking ? '🔊 Ms. Maria is speaking...' :
+                status === 'thinking' ? '💭 Thinking...' :
+                '✅ Auto-listen: ON'
+              ) : (
+                '⏸️ Auto-listen: OFF - Tap mic to start'
+              )}
+            </div>
             
             <button
               onClick={handleMicPress}
