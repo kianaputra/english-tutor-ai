@@ -434,7 +434,7 @@ export default function TutorPageMediaPipe() {
     return () => clearTimeout(timer);
   }, [addMessage, speakNatural]);
 
-  const ChatPanel = () => (
+  const renderChatPanel = () => (
     <div
       className="relative z-10 flex flex-col h-full bg-black/85 backdrop-blur-md border-r border-white/10"
       style={{ width: isMobile ? '85vw' : panelWidth, maxWidth: isMobile ? '360px' : undefined }}
@@ -573,12 +573,12 @@ export default function TutorPageMediaPipe() {
     <div className="flex w-full h-screen overflow-hidden bg-black">
       {isMobile && showPanel && (
         <div className="absolute inset-0 z-30 flex">
-          <ChatPanel />
+          {renderChatPanel()}
           <div className="flex-1 bg-black/60" onClick={() => setShowPanel(false)} />
         </div>
       )}
 
-      {!isMobile && <ChatPanel />}
+      {!isMobile && renderChatPanel()}
 
       {!isMobile && (
         <div onMouseDown={handleDragStart}
