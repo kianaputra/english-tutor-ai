@@ -19,7 +19,12 @@ export default function TutorPageMediaPipe() {
   const [manualInput, setManualInput] = useState('');
   const [showChat, setShowChat] = useState(true);
   const [panelWidth, setPanelWidth] = useState(288);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+  if (typeof window !== "undefined") {
+    setIsMobile(window.innerWidth < 768);
+  }
+  }, []);
   const [showPanel, setShowPanel] = useState(true);
   const [micError, setMicError] = useState('');
   const [isAutoListen, setIsAutoListen] = useState(false);
@@ -34,7 +39,7 @@ export default function TutorPageMediaPipe() {
   const currentLevelRef = useRef('intermediate');
   const isDraggingRef = useRef(false);
   const isListeningRef = useRef(false);
-  const autoListenRef = useRef(true);
+  const autoListenRef = useRef(false);
   const autoStartTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Update refs untuk menghindari re-creation useCallback berlebih
