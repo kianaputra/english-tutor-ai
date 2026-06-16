@@ -22,10 +22,9 @@ export default function TutorPageMediaPipe() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [showPanel, setShowPanel] = useState(true);
   const [micError, setMicError] = useState('');
-  const [autoListening, setAutoListening] = useState(true); // New state for auto listening mode
 
   const chatAreaRef = useRef<HTMLDivElement>(null);
-  const recRef = useRef<any>(null);
+  const recognitionRef = useRef<any>(null);
   const isSpeakingRef = useRef(false);
   const isThinkingRef = useRef(false);
   const apiKeyRef = useRef(apiKey);
@@ -34,9 +33,9 @@ export default function TutorPageMediaPipe() {
   const currentLevelRef = useRef('intermediate');
   const isDraggingRef = useRef(false);
   const isListeningRef = useRef(false);
-  const autoListeningTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const recognitionRef = useRef<any>(null);
+  const shouldAutoListenRef = useRef(true);
+  const autoListenTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => { isSpeakingRef.current = isSpeaking; }, [isSpeaking]);
   useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
@@ -56,160 +55,101 @@ export default function TutorPageMediaPipe() {
     return () => {
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('orientationchange', handleResize);
-      stopAutoListening();
+      stopListening();
+      if (autoListenTimerRef.current) clearTimeout(autoListenTimerRef.current);
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     };
   }, []);
 
-  const stopAutoListening = useCallback(() => {
-    if (autoListeningTimeoutRef.current) {
-      clearTimeout(autoListeningTimeoutRef.current);
-      autoListeningTimeoutRef.current = null;
-    }
-    if (silenceTimeoutRef.current) {
-      clearTimeout(silenceTimeoutRef.current);
-      silenceTimeoutRef.current = null;
-    }
+  const stopListening = useCallback(() => {
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
-      } catch (_) {}
+      } catch (e) {}
       recognitionRef.current = null;
     }
-    if (isListeningRef.current) {
-      isListeningRef.current = false;
-      setIsListening(false);
-      if (!isSpeakingRef.current && !isThinkingRef.current) setStatus('ready');
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    isListeningRef.current = false;
+    setIsListening(false);
+    if (!isSpeakingRef.current && !isThinkingRef.current) {
+      setStatus('ready');
     }
   }, []);
 
-  const startAutoListening = useCallback(() => {
-    if (!autoListening) return;
+  const startListening = useCallback(() => {
+    if (!shouldAutoListenRef.current) return;
     if (isSpeakingRef.current || isThinkingRef.current) return;
     if (isListeningRef.current) return;
 
-    setMicError('');
-
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) {
-      setMicError('Browser tidak support Speech Recognition. Coba Chrome.');
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setMicError('Browser tidak support Speech Recognition');
       return;
     }
 
-    // Stop previous recognition if exists
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-      } catch (_) {}
-      recognitionRef.current = null;
-    }
+    stopListening();
 
-    const rec = new SR();
-    rec.lang = 'en-US';
-    rec.continuous = true; // Set to true to detect silence
-    rec.interimResults = true;
-    recRef.current = rec;
-    recognitionRef.current = rec;
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'en-US';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognitionRef.current = recognition;
 
-    let finalTranscript = '';
-    let lastSpeechTime = Date.now();
-    let isFinalizing = false;
-
-    rec.onstart = () => {
+    recognition.onstart = () => {
       isListeningRef.current = true;
       setIsListening(true);
       setStatus('listening');
-      finalTranscript = '';
-      isFinalizing = false;
-      
-      // Reset silence timeout
-      if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
-      silenceTimeoutRef.current = setTimeout(() => {
-        if (isListeningRef.current && !isFinalizing && finalTranscript.trim()) {
-          // User stopped speaking for 5 seconds
-          handleUserSpeechComplete(finalTranscript.trim());
-        } else if (isListeningRef.current && !finalTranscript.trim()) {
-          // No speech detected, keep listening
-          lastSpeechTime = Date.now();
-        }
-      }, 5000);
+      setMicError('');
     };
 
-    rec.onresult = (e: any) => {
-      let interimText = '';
-      for (let i = 0; i < e.results.length; i++) {
-        if (e.results[i].isFinal) {
-          finalTranscript += e.results[i][0].transcript;
-          lastSpeechTime = Date.now();
-          
-          // Reset silence timeout on new speech
-          if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
-          silenceTimeoutRef.current = setTimeout(() => {
-            if (isListeningRef.current && !isFinalizing && finalTranscript.trim()) {
-              handleUserSpeechComplete(finalTranscript.trim());
-            }
-          }, 5000);
-        } else {
-          interimText += e.results[i][0].transcript;
-        }
+    recognition.onresult = async (event: any) => {
+      const text = event.results[0][0].transcript;
+      if (text && text.trim()) {
+        stopListening();
+        await processUserInput(text.trim());
       }
     };
 
-    rec.onerror = (e: any) => {
-      if (e.error === 'not-allowed') {
-        setMicError('Izin mikrofon ditolak. Buka Settings browser dan izinkan mikrofon.');
-        setAutoListening(false);
-      } else if (e.error !== 'no-speech') {
-        console.log('Recognition error:', e.error);
+    recognition.onerror = (event: any) => {
+      if (event.error === 'not-allowed') {
+        setMicError('Izin mikrofon ditolak');
+        shouldAutoListenRef.current = false;
+      } else if (event.error !== 'no-speech') {
+        console.log('Recognition error:', event.error);
       }
+      stopListening();
       
-      // Restart if still in auto mode and not speaking/thinking
-      if (autoListening && !isSpeakingRef.current && !isThinkingRef.current && e.error !== 'not-allowed') {
-        setTimeout(() => startAutoListening(), 1000);
-      } else {
+      // Auto restart jika masih dalam mode auto listen
+      if (shouldAutoListenRef.current && !isSpeakingRef.current && !isThinkingRef.current) {
+        autoListenTimerRef.current = setTimeout(() => startListening(), 1000);
+      }
+    };
+
+    recognition.onend = () => {
+      if (isListeningRef.current) {
         isListeningRef.current = false;
         setIsListening(false);
-        if (!isSpeakingRef.current && !isThinkingRef.current) setStatus('ready');
       }
-    };
-
-    rec.onend = () => {
-      isListeningRef.current = false;
-      setIsListening(false);
       recognitionRef.current = null;
       
-      // Auto restart if needed
-      if (autoListening && !isSpeakingRef.current && !isThinkingRef.current && !isFinalizing) {
-        setTimeout(() => startAutoListening(), 500);
+      // Restart listening jika mode auto aktif
+      if (shouldAutoListenRef.current && !isSpeakingRef.current && !isThinkingRef.current && status !== 'thinking') {
+        autoListenTimerRef.current = setTimeout(() => startListening(), 500);
       } else if (!isSpeakingRef.current && !isThinkingRef.current) {
         setStatus('ready');
       }
     };
 
-    const handleUserSpeechComplete = async (text: string) => {
-      if (!text || isFinalizing) return;
-      isFinalizing = true;
-      
-      // Stop listening
-      try { rec.stop(); } catch (_) {}
-      isListeningRef.current = false;
-      setIsListening(false);
-      
-      // Process the user input
-      await processUserInput(text);
-    };
-
     try {
-      rec.start();
+      recognition.start();
     } catch (err) {
-      setMicError('Gagal mulai mikrofon. Coba lagi.');
-      isListeningRef.current = false;
-      setIsListening(false);
-      setStatus('ready');
-      if (autoListening) {
-        setTimeout(() => startAutoListening(), 2000);
-      }
+      setMicError('Gagal memulai microphone');
+      stopListening();
     }
-  }, [autoListening, processUserInput]);
+  }, [processUserInput, stopListening, status]);
 
   const handleDragStart = (e: React.MouseEvent) => {
     isDraggingRef.current = true;
@@ -242,47 +182,57 @@ export default function TutorPageMediaPipe() {
   const speakNatural = useCallback((text: string) => {
     if (!text.trim()) return;
     
-    // Stop any ongoing recognition
-    stopAutoListening();
+    // Stop listening while speaking
+    stopListening();
+    if (autoListenTimerRef.current) clearTimeout(autoListenTimerRef.current);
     
     window.speechSynthesis.cancel();
     isSpeakingRef.current = true;
     setIsSpeaking(true);
     setStatus('speaking');
 
-    const utt = new SpeechSynthesisUtterance(text);
-    utt.lang = 'en-US';
-    utt.rate = 0.88;
-    utt.pitch = 1.1;
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'en-US';
+    utterance.rate = 0.88;
+    utterance.pitch = 1.1;
 
-    const applyVoice = () => {
+    const setVoice = () => {
       const voices = window.speechSynthesis.getVoices();
-      const v = voices.find(v => v.lang.startsWith('en') && v.name.toLowerCase().includes('female'))
-             || voices.find(v => v.lang === 'en-US')
-             || voices.find(v => v.lang.startsWith('en'));
-      if (v) utt.voice = v;
+      const voice = voices.find(v => v.lang.startsWith('en') && v.name.toLowerCase().includes('female'))
+                 || voices.find(v => v.lang === 'en-US')
+                 || voices.find(v => v.lang.startsWith('en'));
+      if (voice) utterance.voice = voice;
     };
-    applyVoice();
+    
+    setVoice();
     if (!window.speechSynthesis.getVoices().length) {
-      window.speechSynthesis.onvoiceschanged = applyVoice;
+      window.speechSynthesis.onvoiceschanged = setVoice;
     }
 
-    const done = () => {
+    utterance.onend = () => {
       isSpeakingRef.current = false;
       setIsSpeaking(false);
       setStatus('ready');
       
-      // Start listening again after robot finishes speaking (with 1 second delay)
-      if (autoListening && !isThinkingRef.current) {
-        autoListeningTimeoutRef.current = setTimeout(() => {
-          startAutoListening();
+      // Start listening again after speaking (delay 1 detik)
+      if (shouldAutoListenRef.current && !isThinkingRef.current) {
+        autoListenTimerRef.current = setTimeout(() => {
+          startListening();
         }, 1000);
       }
     };
-    utt.onend = done;
-    utt.onerror = done;
-    window.speechSynthesis.speak(utt);
-  }, [autoListening, startAutoListening, stopAutoListening]);
+
+    utterance.onerror = () => {
+      isSpeakingRef.current = false;
+      setIsSpeaking(false);
+      setStatus('ready');
+      if (shouldAutoListenRef.current && !isThinkingRef.current) {
+        autoListenTimerRef.current = setTimeout(() => startListening(), 1000);
+      }
+    };
+
+    window.speechSynthesis.speak(utterance);
+  }, [startListening, stopListening]);
 
   const stopSpeaking = useCallback(() => {
     window.speechSynthesis.cancel();
@@ -290,24 +240,23 @@ export default function TutorPageMediaPipe() {
     setIsSpeaking(false);
     setStatus('ready');
     
-    // Start listening again after stopping
-    if (autoListening && !isThinkingRef.current) {
-      autoListeningTimeoutRef.current = setTimeout(() => {
-        startAutoListening();
-      }, 500);
+    if (shouldAutoListenRef.current && !isThinkingRef.current) {
+      autoListenTimerRef.current = setTimeout(() => startListening(), 500);
     }
-  }, [autoListening, startAutoListening]);
+  }, [startListening]);
 
   const callGroqAI = useCallback(async (userText: string): Promise<string> => {
     const key = apiKeyRef.current;
     if (!key?.startsWith('gsk_')) throw new Error('Valid Groq API key required');
+    
     const systemPrompts: Record<string, string> = {
       conversation: `You are Ms. Maria, a kind English tutor. Student level: ${currentLevelRef.current}. Reply in 2-3 sentences max. Gently correct grammar mistakes with "(correction: ...)". English only.`,
       grammar: `You are Ms. Maria, grammar expert. Level: ${currentLevelRef.current}. Format: **Corrected:** [sentence] **Mistakes:** - [explanation] **Tip:** [rule]. English only.`,
       vocabulary: `You are Ms. Maria. Teach 3-5 words: • Word (pronunciation): meaning + example. English only.`,
       roleplay: `You are Ms. Maria, roleplay partner. Level: ${currentLevelRef.current}. Natural dialogue. End with 💡 Tip: [phrase]. English only.`,
     };
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
       body: JSON.stringify({
@@ -324,68 +273,86 @@ export default function TutorPageMediaPipe() {
         temperature: 0.68,
       }),
     });
-    if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message || 'API error'); }
-    return (await res.json()).choices[0].message.content;
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || 'API error');
+    }
+    
+    const data = await response.json();
+    return data.choices[0].message.content;
   }, []);
 
   const processUserInput = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || isThinkingRef.current) return;
+    
     if (!apiKeyRef.current) {
       addMessage('bot', "Please add your Groq API key. Tap ☰ menu.");
       speakNatural("Please add your Groq API key first.");
       return;
     }
+    
     isThinkingRef.current = true;
     addMessage('user', trimmed);
     setStatus('thinking');
+    
     try {
       const reply = await callGroqAI(trimmed);
       addMessage('bot', reply);
-      speakNatural(reply);
+      await speakNatural(reply);
     } catch (err) {
       addMessage('bot', `⚠️ ${err instanceof Error ? err.message : 'Unknown error'}`);
       setStatus('ready');
-      // Start listening again on error
-      if (autoListening) {
-        setTimeout(() => startAutoListening(), 1000);
+      if (shouldAutoListenRef.current) {
+        autoListenTimerRef.current = setTimeout(() => startListening(), 1000);
       }
     } finally {
       isThinkingRef.current = false;
     }
-  }, [addMessage, speakNatural, callGroqAI, autoListening, startAutoListening]);
+  }, [addMessage, speakNatural, callGroqAI, startListening]);
 
-  // Manual mic button for fallback
+  // Manual mic button
   const handleMicPress = useCallback(() => {
     if (isListeningRef.current) {
-      // Stop listening
-      stopAutoListening();
+      stopListening();
+      shouldAutoListenRef.current = false;
+      setStatus('ready');
     } else {
       if (isSpeakingRef.current || isThinkingRef.current) return;
-      startAutoListening();
+      shouldAutoListenRef.current = true;
+      startListening();
     }
-  }, [startAutoListening, stopAutoListening]);
+  }, [startListening, stopListening]);
 
-  // Greeting and start auto listening
-  useEffect(() => {
-    const t = setTimeout(() => {
-      const greetings = [
-        "Hello! I'm Ms. Maria, your English tutor. How are you today?",
-        "Welcome! I'm Ms. Maria. Ready to practice English together?",
-        "Hi there! I'm Ms. Maria. What would you like to practice today?",
-      ];
-      const msg = greetings[Math.floor(Math.random() * greetings.length)];
-      addMessage('bot', msg);
-      speakNatural(msg);
-    }, 1000);
-    return () => clearTimeout(t);
-  }, []);
+  // Toggle auto listen
+  const toggleAutoListen = useCallback(() => {
+    shouldAutoListenRef.current = !shouldAutoListenRef.current;
+    if (!shouldAutoListenRef.current) {
+      stopListening();
+      if (autoListenTimerRef.current) clearTimeout(autoListenTimerRef.current);
+    } else {
+      if (!isSpeakingRef.current && !isThinkingRef.current) {
+        startListening();
+      }
+    }
+  }, [startListening, stopListening]);
+
+  const handleSendManual = useCallback(() => {
+    if (manualInput.trim()) {
+      stopListening();
+      processUserInput(manualInput);
+      setManualInput('');
+    }
+  }, [manualInput, processUserInput, stopListening]);
 
   const downloadConversation = useCallback(() => {
     if (messages.length === 0) return;
     const now = new Date();
     let text = `English Tutoring Session - Ms. Maria\nDate: ${now.toLocaleDateString()} ${now.toLocaleTimeString()}\nMode: ${currentMode} | Level: ${currentLevel}\n${'='.repeat(50)}\n\n`;
-    messages.forEach(m => { text += `[${m.role === 'user' ? 'You' : 'Ms. Maria'}]\n${m.content}\n\n`; });
+    messages.forEach(m => {
+      text += `[${m.role === 'user' ? 'You' : 'Ms. Maria'}]\n${m.content}\n\n`;
+    });
     const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -407,56 +374,50 @@ export default function TutorPageMediaPipe() {
     }
   }, [apiKey, addMessage, speakNatural]);
 
-  const handleSendManual = useCallback(() => {
-    if (manualInput.trim()) {
-      stopAutoListening();
-      processUserInput(manualInput);
-      setManualInput('');
-    }
-  }, [manualInput, processUserInput, stopAutoListening]);
-
-  const toggleAutoListening = useCallback(() => {
-    setAutoListening(prev => {
-      if (prev) {
-        stopAutoListening();
-      } else {
-        if (!isSpeakingRef.current && !isThinkingRef.current) {
-          startAutoListening();
-        }
-      }
-      return !prev;
-    });
-  }, [stopAutoListening, startAutoListening]);
+  // Initial greeting
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const greetings = [
+        "Hello! I'm Ms. Maria, your English tutor. How are you today?",
+        "Welcome! I'm Ms. Maria. Ready to practice English together?",
+        "Hi there! I'm Ms. Maria. What would you like to practice today?",
+      ];
+      const msg = greetings[Math.floor(Math.random() * greetings.length)];
+      addMessage('bot', msg);
+      speakNatural(msg);
+    }, 1000);
+    
+    return () => clearTimeout(timer);
+  }, []);
 
   const ChatPanel = () => (
     <div
       className="relative z-10 flex flex-col h-full bg-black/85 backdrop-blur-md border-r border-white/10"
       style={{ width: isMobile ? '85vw' : panelWidth, maxWidth: isMobile ? '360px' : undefined }}
     >
-      {/* Header */}
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-white/10 shrink-0">
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full shrink-0 ${
-            status === 'ready'     ? 'bg-emerald-400' :
-            status === 'listening' ? 'bg-orange-400' :
-            status === 'thinking'  ? 'bg-yellow-400 animate-pulse' :
+            status === 'ready' ? 'bg-emerald-400' :
+            status === 'listening' ? 'bg-orange-400 animate-pulse' :
+            status === 'thinking' ? 'bg-yellow-400 animate-pulse' :
             'bg-blue-400 animate-pulse'
           }`} />
           <span className="text-xs font-medium text-white/80 truncate">
-            {status === 'ready'     ? 'Ready' :
+            {status === 'ready' ? 'Ready' :
              status === 'listening' ? '🎤 Listening...' :
-             status === 'thinking'  ? '💭 Thinking...' :
+             status === 'thinking' ? '💭 Thinking...' :
              '🔊 Speaking...'}
           </span>
         </div>
         <div className="flex items-center gap-1">
-          <button onClick={toggleAutoListening}
-            title={autoListening ? "Auto-listening ON" : "Auto-listening OFF"}
-            className={`w-7 h-7 rounded-full flex items-center justify-center ${autoListening ? 'bg-green-500/40' : 'bg-white/10'}`}>
-            <Mic className={`w-3.5 h-3.5 ${autoListening ? 'text-green-300' : 'text-white/50'}`} />
+          <button 
+            onClick={toggleAutoListen}
+            title={shouldAutoListenRef.current ? "Auto-listen ON" : "Auto-listen OFF"}
+            className={`w-7 h-7 rounded-full flex items-center justify-center ${shouldAutoListenRef.current ? 'bg-green-500/40' : 'bg-white/10'}`}>
+            <Mic className={`w-3.5 h-3.5 ${shouldAutoListenRef.current ? 'text-green-300' : 'text-white/50'}`} />
           </button>
           <button onClick={downloadConversation} disabled={messages.length === 0}
-            title="Download conversation"
             className="w-7 h-7 rounded-full bg-white/10 hover:bg-green-500/40 disabled:opacity-30 flex items-center justify-center">
             <Download className="w-3.5 h-3.5 text-white" />
           </button>
@@ -469,15 +430,13 @@ export default function TutorPageMediaPipe() {
             {showMenu ? <X className="w-3.5 h-3.5 text-white" /> : <Menu className="w-3.5 h-3.5 text-white" />}
           </button>
           {isMobile && (
-            <button onClick={() => setShowPanel(false)}
-              className="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center ml-1">
+            <button onClick={() => setShowPanel(false)} className="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center ml-1">
               <X className="w-3.5 h-3.5 text-white" />
             </button>
           )}
         </div>
       </div>
 
-      {/* Messages */}
       <div ref={chatAreaRef}
         className="overflow-y-auto p-3 flex flex-col gap-3"
         style={{ flex: '1 1 0', minHeight: 0, display: showChat ? 'flex' : 'none' }}
@@ -501,23 +460,20 @@ export default function TutorPageMediaPipe() {
         ))}
       </div>
 
-      {/* Input area */}
       <div className="p-3 border-t border-white/10 shrink-0 flex flex-col gap-2">
         {inputMode === 'mic' ? (
           <>
-            {/* Status message */}
             <div className="text-center text-xs text-white/50">
-              {autoListening ? (
-                isListening ? '🎤 Listening... Speak now' : 
+              {shouldAutoListenRef.current ? (
+                isListening ? '🎤 Auto-listen: Speak now' : 
                 isSpeaking ? '🔊 Ms. Maria is speaking...' :
                 status === 'thinking' ? '💭 Thinking...' :
-                '✅ Auto-listening is ON'
+                '✅ Auto-listen mode: ON'
               ) : (
-                '⏸️ Auto-listening is OFF - Tap Mic button to start'
+                '⏸️ Auto-listen OFF - Tap mic to start'
               )}
             </div>
             
-            {/* Mic button (fallback) */}
             <button
               onClick={handleMicPress}
               disabled={isSpeaking || isThinkingRef.current}
@@ -526,27 +482,25 @@ export default function TutorPageMediaPipe() {
                   ? 'bg-orange-500 text-white shadow-lg shadow-orange-900/40'
                   : isSpeaking || status === 'thinking'
                     ? 'bg-white/5 text-white/30 cursor-not-allowed border border-white/10'
-                    : autoListening
+                    : shouldAutoListenRef.current
                       ? 'bg-green-600 hover:bg-green-500 text-white'
                       : 'bg-blue-600 hover:bg-blue-500 text-white'
               }`}
             >
               <Mic className={`w-4 h-4 ${isListening ? 'animate-pulse' : ''}`} />
-              {isListening ? 'Listening... (tap to stop)' : 
-               isSpeaking ? '🔊 Ms. Maria speaking...' : 
-               status === 'thinking' ? '💭 Thinking...' :
-               autoListening ? 'Auto Mode ON' : 'Start Listening'}
+              {isListening ? 'Listening...' : 
+               isSpeaking ? 'Speaking...' : 
+               status === 'thinking' ? 'Thinking...' :
+               shouldAutoListenRef.current ? 'Auto Mode ON' : 'Start Listening'}
             </button>
 
-            {/* Stop AI button */}
             {isSpeaking && (
               <button onClick={stopSpeaking}
                 className="w-full py-2 rounded-full text-xs font-medium flex items-center justify-center gap-2 bg-red-500/20 border border-red-400/50 hover:bg-red-500/40 text-red-300">
-                <Square className="w-3 h-3 fill-red-300" /> Stop Ms. Maria
+                <Square className="w-3 h-3 fill-red-300" /> Stop Speaking
               </button>
             )}
 
-            {/* Error message */}
             {micError && (
               <p className="text-red-400 text-xs text-center px-2">{micError}</p>
             )}
@@ -573,8 +527,6 @@ export default function TutorPageMediaPipe() {
 
   return (
     <div className="flex w-full h-screen overflow-hidden bg-black">
-
-      {/* Mobile overlay */}
       {isMobile && showPanel && (
         <div className="absolute inset-0 z-30 flex">
           <ChatPanel />
@@ -582,16 +534,13 @@ export default function TutorPageMediaPipe() {
         </div>
       )}
 
-      {/* Desktop panel */}
       {!isMobile && <ChatPanel />}
 
-      {/* Drag handle */}
       {!isMobile && (
         <div onMouseDown={handleDragStart}
           className="w-1 h-full bg-white/10 hover:bg-blue-400/60 cursor-col-resize transition-colors shrink-0 z-20" />
       )}
 
-      {/* Teacher */}
       <div className="relative flex-1 h-full">
         <img
           src="/teacher.png"
@@ -601,7 +550,6 @@ export default function TutorPageMediaPipe() {
         />
         <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/70 to-transparent pointer-events-none" />
 
-        {/* Mobile open panel */}
         {isMobile && !showPanel && (
           <button onClick={() => setShowPanel(true)}
             className="absolute top-4 left-4 z-20 w-10 h-10 bg-black/60 backdrop-blur-md border border-white/20 rounded-full flex items-center justify-center">
@@ -609,7 +557,6 @@ export default function TutorPageMediaPipe() {
           </button>
         )}
 
-        {/* Mobile mic button floating */}
         {isMobile && (
           <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3">
             <button
@@ -620,13 +567,13 @@ export default function TutorPageMediaPipe() {
                   ? 'bg-orange-500 border-orange-400 text-white'
                   : isSpeaking
                     ? 'bg-black/60 border-white/20 text-white/40 cursor-not-allowed'
-                    : autoListening
+                    : shouldAutoListenRef.current
                       ? 'bg-green-600 border-green-400 text-white'
                       : 'bg-blue-600 border-blue-400 text-white'
               }`}
             >
               <Mic className={`w-5 h-5 ${isListening ? 'animate-pulse' : ''}`} />
-              {isListening ? 'Stop' : isSpeaking ? '🔊' : autoListening ? 'Auto' : 'Mic'}
+              {isListening ? 'Stop' : isSpeaking ? '🔊' : shouldAutoListenRef.current ? 'Auto' : 'Mic'}
             </button>
             {isSpeaking && (
               <button onClick={stopSpeaking}
@@ -637,13 +584,11 @@ export default function TutorPageMediaPipe() {
           </div>
         )}
 
-        {/* Name tag */}
         <div className="absolute bottom-5 left-1/2 -translate-x-1/2 bg-black/50 backdrop-blur-md rounded-full px-4 py-1.5 border border-white/10">
           <span className="text-sm font-medium text-white">Ms. Maria · English Tutor AI</span>
         </div>
       </div>
 
-      {/* Menu */}
       {showMenu && (
         <div className={`absolute z-50 w-64 bg-gray-950/97 backdrop-blur-xl rounded-2xl border border-white/10 p-4 shadow-2xl flex flex-col gap-3 ${
           isMobile ? 'top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2' : 'top-14 left-4'
