@@ -19,7 +19,7 @@ export default function TutorPageMediaPipe() {
   const [manualInput, setManualInput] = useState('');
   const [showChat, setShowChat] = useState(true);
   const [panelWidth, setPanelWidth] = useState(288);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
   const [showPanel, setShowPanel] = useState(true);
   const [micError, setMicError] = useState('');
 
@@ -54,23 +54,6 @@ export default function TutorPageMediaPipe() {
       window.removeEventListener('orientationchange', handleResize);
     };
   }, []);
-
-  const handleDragStart = (e: React.MouseEvent) => {
-    isDraggingRef.current = true;
-    const startX = e.clientX;
-    const startWidth = panelWidth;
-    const onMove = (ev: MouseEvent) => {
-      if (!isDraggingRef.current) return;
-      setPanelWidth(Math.min(600, Math.max(180, startWidth + ev.clientX - startX)));
-    };
-    const onUp = () => {
-      isDraggingRef.current = false;
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  };
 
   const addMessage = useCallback((role: 'user' | 'bot', content: string) => {
     setMessages(prev => {
@@ -190,27 +173,44 @@ export default function TutorPageMediaPipe() {
       speakNatural(msg);
     }, 1000);
     return () => clearTimeout(t);
-  }, []);
+  }, [addMessage, speakNatural]);
 
-  // ── MIC: simple tap-to-listen ──
+  // ── MIC: Fixed Tap to Listen ──
   const handleMicPress = useCallback(() => {
     setMicError('');
 
+    // Jika sedang mendengarkan, hentikan proses perekaman
     if (isListeningRef.current) {
-      // Stop listening
-      try { recRef.current?.stop(); } catch (_) {}
+      try {
+        if (recRef.current) {
+          recRef.current.stop();
+        }
+      } catch (err) {
+        console.error("Gagal menghentikan mic:", err);
+      }
       return;
     }
 
+    // Jangan izinkan input jika AI sedang berbicara atau berpikir
     if (isSpeakingRef.current || isThinkingRef.current) return;
+
+    // Cek protokol HTTPS (Wajib untuk Web Speech API di kebanyakan browser)
+    if (typeof window !== 'undefined' && window.location.protocol === 'http:' && window.location.hostname !== 'localhost') {
+      setMicError('Aplikasi harus diakses via HTTPS agar Mikrofon berfungsi.');
+      return;
+    }
 
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) {
-      setMicError('Browser tidak support Speech Recognition. Coba Chrome.');
+      setMicError('Browser tidak support Speech Recognition. Gunakan Google Chrome.');
       return;
     }
 
-    // Create fresh instance every time
+    // Bersihkan objek lama jika ada untuk mencegah interferensi pendengaran ganda
+    if (recRef.current) {
+      try { recRef.current.abort(); } catch (_) {}
+    }
+
     const rec = new SR();
     rec.lang = 'en-US';
     rec.continuous = false;
@@ -226,37 +226,65 @@ export default function TutorPageMediaPipe() {
     rec.onresult = (e: any) => {
       let text = '';
       for (let i = 0; i < e.results.length; i++) {
-        if (e.results[i].isFinal) text += e.results[i][0].transcript;
+        if (e.results[i].isFinal) {
+          text += e.results[i][0].transcript;
+        }
       }
-      if (text.trim()) processUserInput(text.trim());
+      if (text.trim()) {
+        processUserInput(text.trim());
+      }
     };
 
     rec.onerror = (e: any) => {
+      console.error("Speech Recognition Error:", e.error);
       isListeningRef.current = false;
       setIsListening(false);
       setStatus('ready');
+      
       if (e.error === 'not-allowed') {
-        setMicError('Izin mikrofon ditolak. Buka Settings browser dan izinkan mikrofon.');
+        setMicError('Izin mikrofon ditolak. Buka pengaturan browser Anda dan izinkan akses mikrofon.');
       } else if (e.error === 'no-speech') {
-        setMicError('Tidak ada suara terdeteksi. Coba lagi.');
+        setMicError('Tidak ada suara terdeteksi. Silakan coba berbicara kembali.');
+      } else {
+        setMicError(`Terjadi kesalahan mic: ${e.error}`);
       }
     };
 
     rec.onend = () => {
       isListeningRef.current = false;
       setIsListening(false);
-      if (!isSpeakingRef.current && !isThinkingRef.current) setStatus('ready');
+      // Hanya ganti ke 'ready' jika tidak sedang dialihkan ke proses berpikir/menjawab
+      if (!isSpeakingRef.current && !isThinkingRef.current) {
+        setStatus('ready');
+      }
     };
 
     try {
       rec.start();
     } catch (err) {
-      setMicError('Gagal mulai mikrofon. Coba lagi.');
+      setMicError('Gagal menjalankan mikrofon. Silakan coba lagi.');
       isListeningRef.current = false;
       setIsListening(false);
       setStatus('ready');
     }
   }, [processUserInput]);
+
+  const handleDragStart = (e: React.MouseEvent) => {
+    isDraggingRef.current = true;
+    const startX = e.clientX;
+    const startWidth = panelWidth;
+    const onMove = (ev: MouseEvent) => {
+      if (!isDraggingRef.current) return;
+      setPanelWidth(Math.min(600, Math.max(180, startWidth + ev.clientX - startX)));
+    };
+    const onUp = () => {
+      isDraggingRef.current = false;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
 
   const downloadConversation = useCallback(() => {
     if (messages.length === 0) return;
@@ -363,10 +391,9 @@ export default function TutorPageMediaPipe() {
       <div className="p-3 border-t border-white/10 shrink-0 flex flex-col gap-2">
         {inputMode === 'mic' ? (
           <>
-            {/* Mic button */}
             <button
               onClick={handleMicPress}
-              disabled={isSpeaking || isThinkingRef.current}
+              disabled={isSpeaking || status === 'thinking'}
               className={`w-full py-3 rounded-full text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
                 isListening
                   ? 'bg-orange-500 text-white shadow-lg shadow-orange-900/40'
@@ -379,7 +406,6 @@ export default function TutorPageMediaPipe() {
               {isListening ? 'Listening... (tap to stop)' : isSpeaking ? '🔊 Ms. Maria speaking...' : status === 'thinking' ? '💭 Thinking...' : 'Tap to Speak'}
             </button>
 
-            {/* Stop AI button */}
             {isSpeaking && (
               <button onClick={stopSpeaking}
                 className="w-full py-2 rounded-full text-xs font-medium flex items-center justify-center gap-2 bg-red-500/20 border border-red-400/50 hover:bg-red-500/40 text-red-300">
@@ -387,9 +413,8 @@ export default function TutorPageMediaPipe() {
               </button>
             )}
 
-            {/* Error message */}
             {micError && (
-              <p className="text-red-400 text-xs text-center px-2">{micError}</p>
+              <p className="text-red-400 text-xs text-center px-2 mt-1 font-medium">{micError}</p>
             )}
           </>
         ) : (
@@ -414,8 +439,6 @@ export default function TutorPageMediaPipe() {
 
   return (
     <div className="flex w-full h-screen overflow-hidden bg-black">
-
-      {/* Mobile overlay */}
       {isMobile && showPanel && (
         <div className="absolute inset-0 z-30 flex">
           <ChatPanel />
@@ -423,16 +446,14 @@ export default function TutorPageMediaPipe() {
         </div>
       )}
 
-      {/* Desktop panel */}
       {!isMobile && <ChatPanel />}
 
-      {/* Drag handle */}
       {!isMobile && (
         <div onMouseDown={handleDragStart}
           className="w-1 h-full bg-white/10 hover:bg-blue-400/60 cursor-col-resize transition-colors shrink-0 z-20" />
       )}
 
-      {/* Teacher */}
+      {/* Teacher Content Display */}
       <div className="relative flex-1 h-full">
         <img
           src="/teacher.png"
@@ -442,7 +463,6 @@ export default function TutorPageMediaPipe() {
         />
         <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/70 to-transparent pointer-events-none" />
 
-        {/* Mobile open panel */}
         {isMobile && !showPanel && (
           <button onClick={() => setShowPanel(true)}
             className="absolute top-4 left-4 z-20 w-10 h-10 bg-black/60 backdrop-blur-md border border-white/20 rounded-full flex items-center justify-center">
@@ -450,39 +470,42 @@ export default function TutorPageMediaPipe() {
           </button>
         )}
 
-        {/* Mobile mic button floating */}
         {isMobile && (
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3">
-            <button
-              onClick={handleMicPress}
-              disabled={isSpeaking}
-              className={`px-6 h-12 rounded-full flex items-center gap-2 border-2 font-semibold text-sm transition-all ${
-                isListening
-                  ? 'bg-orange-500 border-orange-400 text-white'
-                  : isSpeaking
-                    ? 'bg-black/60 border-white/20 text-white/40 cursor-not-allowed'
-                    : 'bg-blue-600 border-blue-400 text-white'
-              }`}
-            >
-              <Mic className={`w-5 h-5 ${isListening ? 'animate-pulse' : ''}`} />
-              {isListening ? 'Stop' : isSpeaking ? '🔊' : 'Speak'}
-            </button>
-            {isSpeaking && (
-              <button onClick={stopSpeaking}
-                className="w-12 h-12 rounded-full bg-red-500/30 border-2 border-red-400/60 flex items-center justify-center">
-                <Square className="w-5 h-5 text-red-400 fill-red-400" />
+          <div className="absolute bottom-16 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-2 w-11/12 max-w-xs">
+            <div className="flex items-center gap-3 justify-center w-full">
+              <button
+                onClick={handleMicPress}
+                disabled={isSpeaking || status === 'thinking'}
+                className={`px-6 h-12 rounded-full flex items-center gap-2 border-2 font-semibold text-sm transition-all ${
+                  isListening
+                    ? 'bg-orange-500 border-orange-400 text-white animate-bounce'
+                    : isSpeaking || status === 'thinking'
+                      ? 'bg-black/60 border-white/20 text-white/40 cursor-not-allowed'
+                      : 'bg-blue-600 border-blue-400 text-white'
+                }`}
+              >
+                <Mic className={`w-5 h-5 ${isListening ? 'animate-pulse' : ''}`} />
+                {isListening ? 'Stop' : isSpeaking ? '🔊 Speaking' : 'Speak'}
               </button>
+              {isSpeaking && (
+                <button onClick={stopSpeaking}
+                  className="w-12 h-12 rounded-full bg-red-500/30 border-2 border-red-400/60 flex items-center justify-center">
+                  <Square className="w-5 h-5 text-red-400 fill-red-400" />
+                </button>
+              )}
+            </div>
+            {micError && (
+              <p className="bg-black/80 px-3 py-1 rounded-lg text-red-400 text-[11px] text-center border border-red-500/30">{micError}</p>
             )}
           </div>
         )}
 
-        {/* Name tag */}
         <div className="absolute bottom-5 left-1/2 -translate-x-1/2 bg-black/50 backdrop-blur-md rounded-full px-4 py-1.5 border border-white/10">
           <span className="text-sm font-medium text-white">Ms. Maria · English Tutor AI</span>
         </div>
       </div>
 
-      {/* Menu */}
+      {/* Options Menu */}
       {showMenu && (
         <div className={`absolute z-50 w-64 bg-gray-950/97 backdrop-blur-xl rounded-2xl border border-white/10 p-4 shadow-2xl flex flex-col gap-3 ${
           isMobile ? 'top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2' : 'top-14 left-4'
