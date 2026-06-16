@@ -15,14 +15,14 @@ export default function TutorPageMediaPipe() {
   const [showMenu, setShowMenu] = useState(false);
   const [currentMode, setCurrentMode] = useState('conversation');
   const [currentLevel, setCurrentLevel] = useState('intermediate');
-  const [inputMode, setInputMode] = useState<'mic' | 'chat'>('mic');
+  const [inputMode, setInputMode] = useState<'mic' | 'chat'>('chat');
   const [manualInput, setManualInput] = useState('');
   const [showChat, setShowChat] = useState(true);
   const [panelWidth, setPanelWidth] = useState(288);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [showPanel, setShowPanel] = useState(true);
   const [micError, setMicError] = useState('');
-  const [isAutoListen, setIsAutoListen] = useState(true);
+  const [isAutoListen, setIsAutoListen] = useState(false);
 
   const chatAreaRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
@@ -452,7 +452,7 @@ export default function TutorPageMediaPipe() {
         <div className="flex items-center gap-1">
           <button 
             onClick={toggleAutoListen}
-            target-title={isAutoListen ? "Auto-listen ON" : "Auto-listen OFF"}
+            title={isAutoListen ? "Auto-listen ON" : "Auto-listen OFF"}
             className={`w-7 h-7 rounded-full flex items-center justify-center ${isAutoListen ? 'bg-green-500/40' : 'bg-white/10'}`}>
             <Mic className={`w-3.5 h-3.5 ${isAutoListen ? 'text-green-300' : 'text-white/50'}`} />
           </button>
