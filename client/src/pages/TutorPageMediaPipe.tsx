@@ -19,9 +19,10 @@ export default function TutorPageMediaPipe() {
   const [manualInput, setManualInput] = useState('');
   const [showChat, setShowChat] = useState(true);
   const [panelWidth, setPanelWidth] = useState(288);
-  const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [showPanel, setShowPanel] = useState(true);
   const [micError, setMicError] = useState('');
+  const [autoListening, setAutoListening] = useState(true); // New state for auto listening mode
 
   const chatAreaRef = useRef<HTMLDivElement>(null);
   const recRef = useRef<any>(null);
@@ -33,10 +34,9 @@ export default function TutorPageMediaPipe() {
   const currentLevelRef = useRef('intermediate');
   const isDraggingRef = useRef(false);
   const isListeningRef = useRef(false);
-
-  // Ref tambahan untuk menampung teks sementara dan timer jeda 5 detik
-  const accumulatedTextRef = useRef('');
+  const autoListeningTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const recognitionRef = useRef<any>(null);
 
   useEffect(() => { isSpeakingRef.current = isSpeaking; }, [isSpeaking]);
   useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
@@ -56,8 +56,177 @@ export default function TutorPageMediaPipe() {
     return () => {
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('orientationchange', handleResize);
+      stopAutoListening();
     };
   }, []);
+
+  const stopAutoListening = useCallback(() => {
+    if (autoListeningTimeoutRef.current) {
+      clearTimeout(autoListeningTimeoutRef.current);
+      autoListeningTimeoutRef.current = null;
+    }
+    if (silenceTimeoutRef.current) {
+      clearTimeout(silenceTimeoutRef.current);
+      silenceTimeoutRef.current = null;
+    }
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (_) {}
+      recognitionRef.current = null;
+    }
+    if (isListeningRef.current) {
+      isListeningRef.current = false;
+      setIsListening(false);
+      if (!isSpeakingRef.current && !isThinkingRef.current) setStatus('ready');
+    }
+  }, []);
+
+  const startAutoListening = useCallback(() => {
+    if (!autoListening) return;
+    if (isSpeakingRef.current || isThinkingRef.current) return;
+    if (isListeningRef.current) return;
+
+    setMicError('');
+
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) {
+      setMicError('Browser tidak support Speech Recognition. Coba Chrome.');
+      return;
+    }
+
+    // Stop previous recognition if exists
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (_) {}
+      recognitionRef.current = null;
+    }
+
+    const rec = new SR();
+    rec.lang = 'en-US';
+    rec.continuous = true; // Set to true to detect silence
+    rec.interimResults = true;
+    recRef.current = rec;
+    recognitionRef.current = rec;
+
+    let finalTranscript = '';
+    let lastSpeechTime = Date.now();
+    let isFinalizing = false;
+
+    rec.onstart = () => {
+      isListeningRef.current = true;
+      setIsListening(true);
+      setStatus('listening');
+      finalTranscript = '';
+      isFinalizing = false;
+      
+      // Reset silence timeout
+      if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+      silenceTimeoutRef.current = setTimeout(() => {
+        if (isListeningRef.current && !isFinalizing && finalTranscript.trim()) {
+          // User stopped speaking for 5 seconds
+          handleUserSpeechComplete(finalTranscript.trim());
+        } else if (isListeningRef.current && !finalTranscript.trim()) {
+          // No speech detected, keep listening
+          lastSpeechTime = Date.now();
+        }
+      }, 5000);
+    };
+
+    rec.onresult = (e: any) => {
+      let interimText = '';
+      for (let i = 0; i < e.results.length; i++) {
+        if (e.results[i].isFinal) {
+          finalTranscript += e.results[i][0].transcript;
+          lastSpeechTime = Date.now();
+          
+          // Reset silence timeout on new speech
+          if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+          silenceTimeoutRef.current = setTimeout(() => {
+            if (isListeningRef.current && !isFinalizing && finalTranscript.trim()) {
+              handleUserSpeechComplete(finalTranscript.trim());
+            }
+          }, 5000);
+        } else {
+          interimText += e.results[i][0].transcript;
+        }
+      }
+    };
+
+    rec.onerror = (e: any) => {
+      if (e.error === 'not-allowed') {
+        setMicError('Izin mikrofon ditolak. Buka Settings browser dan izinkan mikrofon.');
+        setAutoListening(false);
+      } else if (e.error !== 'no-speech') {
+        console.log('Recognition error:', e.error);
+      }
+      
+      // Restart if still in auto mode and not speaking/thinking
+      if (autoListening && !isSpeakingRef.current && !isThinkingRef.current && e.error !== 'not-allowed') {
+        setTimeout(() => startAutoListening(), 1000);
+      } else {
+        isListeningRef.current = false;
+        setIsListening(false);
+        if (!isSpeakingRef.current && !isThinkingRef.current) setStatus('ready');
+      }
+    };
+
+    rec.onend = () => {
+      isListeningRef.current = false;
+      setIsListening(false);
+      recognitionRef.current = null;
+      
+      // Auto restart if needed
+      if (autoListening && !isSpeakingRef.current && !isThinkingRef.current && !isFinalizing) {
+        setTimeout(() => startAutoListening(), 500);
+      } else if (!isSpeakingRef.current && !isThinkingRef.current) {
+        setStatus('ready');
+      }
+    };
+
+    const handleUserSpeechComplete = async (text: string) => {
+      if (!text || isFinalizing) return;
+      isFinalizing = true;
+      
+      // Stop listening
+      try { rec.stop(); } catch (_) {}
+      isListeningRef.current = false;
+      setIsListening(false);
+      
+      // Process the user input
+      await processUserInput(text);
+    };
+
+    try {
+      rec.start();
+    } catch (err) {
+      setMicError('Gagal mulai mikrofon. Coba lagi.');
+      isListeningRef.current = false;
+      setIsListening(false);
+      setStatus('ready');
+      if (autoListening) {
+        setTimeout(() => startAutoListening(), 2000);
+      }
+    }
+  }, [autoListening, processUserInput]);
+
+  const handleDragStart = (e: React.MouseEvent) => {
+    isDraggingRef.current = true;
+    const startX = e.clientX;
+    const startWidth = panelWidth;
+    const onMove = (ev: MouseEvent) => {
+      if (!isDraggingRef.current) return;
+      setPanelWidth(Math.min(600, Math.max(180, startWidth + ev.clientX - startX)));
+    };
+    const onUp = () => {
+      isDraggingRef.current = false;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
 
   const addMessage = useCallback((role: 'user' | 'bot', content: string) => {
     setMessages(prev => {
@@ -70,114 +239,18 @@ export default function TutorPageMediaPipe() {
     }, 50);
   }, []);
 
-  // Forward declaration agar bisa saling panggil dengan speakNatural
-  const startContinuousListening = useCallback(() => {
-    if (isListeningRef.current || isSpeakingRef.current || isThinkingRef.current) return;
-
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) return;
-
-    if (recRef.current) {
-      try { recRef.current.abort(); } catch (_) {}
-    }
-
-    const rec = new SR();
-    rec.lang = 'en-US';
-    rec.continuous = true; // Diubah menjadi true agar mendengarkan terus tanpa stop otomatis
-    rec.interimResults = true; // Kita aktifkan interim agar tahu kapan user sedang berbicara
-    recRef.current = rec;
-
-    rec.onstart = () => {
-      isListeningRef.current = true;
-      setIsListening(true);
-      setStatus('listening');
-      setMicError('');
-    };
-
-    rec.onresult = (e: any) => {
-      // Jika AI mendadak mulai berpikir/berbicara, abaikan input baru suara demi keamanan logika
-      if (isThinkingRef.current || isSpeakingRef.current) return;
-
-      // Hapus timer tunggu yang lama karena user terdeteksi masih bersuara/melanjutkan kalimat
-      if (silenceTimeoutRef.current) {
-        clearTimeout(silenceTimeoutRef.current);
-      }
-
-      let interimTranscript = '';
-      let finalTranscript = '';
-
-      for (let i = e.resultIndex; i < e.results.length; ++i) {
-        if (e.results[i].isFinal) {
-          finalTranscript += e.results[i][0].transcript;
-        } else {
-          interimTranscript += e.results[i][0].transcript;
-        }
-      }
-
-      if (finalTranscript) {
-        accumulatedTextRef.current += ' ' + finalTranscript;
-      }
-
-      // Gabungan teks yang valid dibicarakan sejauh ini
-      const currentSpeech = (accumulatedTextRef.current + ' ' + interimTranscript).trim();
-
-      if (currentSpeech) {
-        // Beri jeda 5000ms (5 detik) setelah kata terakhir diucapkan pengguna
-        silenceTimeoutRef.current = setTimeout(() => {
-          const finalPrompt = accumulatedTextRef.current.trim();
-          accumulatedTextRef.current = ''; // Reset penampung teks
-          
-          if (finalPrompt) {
-            // Matikan perekaman suara terlebih dahulu agar tidak menangkap suara AI-nya sendiri
-            try { rec.stop(); } catch (_) {}
-            processUserInput(finalPrompt);
-          }
-        }, 5000); 
-      }
-    };
-
-    rec.onerror = (e: any) => {
-      console.error("Continuous Mic Error:", e.error);
-      if (e.error === 'no-speech') return; // Abaikan error no-speech agar tidak mengganggu keheningan ruangan
-      
-      isListeningRef.current = false;
-      setIsListening(false);
-      setStatus('ready');
-      if (e.error === 'not-allowed') {
-        setMicError('Izin mikrofon ditolak.');
-      }
-    };
-
-    rec.onend = () => {
-      isListeningRef.current = false;
-      setIsListening(false);
-      
-      // Auto-restart: Jika mic mati bukan karena AI sedang berpikir/berbicara, nyalakan kembali secara otomatis
-      setTimeout(() => {
-        if (!isSpeakingRef.current && !isThinkingRef.current && inputMode === 'mic') {
-          startContinuousListening();
-        }
-      }, 300);
-    };
-
-    try {
-      rec.start();
-    } catch (err) {
-      console.error("Gagal start mic:", err);
-    }
-  }, [inputMode]);
-
   const speakNatural = useCallback((text: string) => {
     if (!text.trim()) return;
+    
+    // Stop any ongoing recognition
+    stopAutoListening();
+    
     window.speechSynthesis.cancel();
     isSpeakingRef.current = true;
     setIsSpeaking(true);
     setStatus('speaking');
 
-    const interstateText = text;
-    const interstateInputMode = inputMode;
-
-    const utt = new SpeechSynthesisUtterance(interstateText);
+    const utt = new SpeechSynthesisUtterance(text);
     utt.lang = 'en-US';
     utt.rate = 0.88;
     utt.pitch = 1.1;
@@ -198,27 +271,32 @@ export default function TutorPageMediaPipe() {
       isSpeakingRef.current = false;
       setIsSpeaking(false);
       setStatus('ready');
-      // Otomatis aktifkan mic kembali setelah Ms. Maria selesai berbicara jika berada di mode mic
-      if (interstateInputMode === 'mic') {
-        setTimeout(() => {
-          startContinuousListening();
-        }, 400);
+      
+      // Start listening again after robot finishes speaking (with 1 second delay)
+      if (autoListening && !isThinkingRef.current) {
+        autoListeningTimeoutRef.current = setTimeout(() => {
+          startAutoListening();
+        }, 1000);
       }
     };
     utt.onend = done;
     utt.onerror = done;
     window.speechSynthesis.speak(utt);
-  }, [startContinuousListening, inputMode]);
+  }, [autoListening, startAutoListening, stopAutoListening]);
 
   const stopSpeaking = useCallback(() => {
     window.speechSynthesis.cancel();
     isSpeakingRef.current = false;
     setIsSpeaking(false);
     setStatus('ready');
-    if (inputMode === 'mic') {
-      startContinuousListening();
+    
+    // Start listening again after stopping
+    if (autoListening && !isThinkingRef.current) {
+      autoListeningTimeoutRef.current = setTimeout(() => {
+        startAutoListening();
+      }, 500);
     }
-  }, [startContinuousListening, inputMode]);
+  }, [autoListening, startAutoListening]);
 
   const callGroqAI = useCallback(async (userText: string): Promise<string> => {
     const key = apiKeyRef.current;
@@ -268,13 +346,27 @@ export default function TutorPageMediaPipe() {
     } catch (err) {
       addMessage('bot', `⚠️ ${err instanceof Error ? err.message : 'Unknown error'}`);
       setStatus('ready');
-      if (inputMode === 'mic') startContinuousListening();
+      // Start listening again on error
+      if (autoListening) {
+        setTimeout(() => startAutoListening(), 1000);
+      }
     } finally {
       isThinkingRef.current = false;
     }
-  }, [addMessage, speakNatural, callGroqAI, startContinuousListening, inputMode]);
+  }, [addMessage, speakNatural, callGroqAI, autoListening, startAutoListening]);
 
-  // Greeting di awal aplikasi & inisialisasi mic otomatis
+  // Manual mic button for fallback
+  const handleMicPress = useCallback(() => {
+    if (isListeningRef.current) {
+      // Stop listening
+      stopAutoListening();
+    } else {
+      if (isSpeakingRef.current || isThinkingRef.current) return;
+      startAutoListening();
+    }
+  }, [startAutoListening, stopAutoListening]);
+
+  // Greeting and start auto listening
   useEffect(() => {
     const t = setTimeout(() => {
       const greetings = [
@@ -284,42 +376,10 @@ export default function TutorPageMediaPipe() {
       ];
       const msg = greetings[Math.floor(Math.random() * greetings.length)];
       addMessage('bot', msg);
-      // Mode mic akan otomatis start via callback didalam fungsi speakNatural pasca-selesai greeting
       speakNatural(msg);
     }, 1000);
-    return () => {
-      clearTimeout(t);
-      if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
-    };
+    return () => clearTimeout(t);
   }, []);
-
-  // Triger manual atau switch mode input
-  useEffect(() => {
-    if (inputMode === 'mic' && !isSpeaking && !isThinkingRef.current) {
-      startContinuousListening();
-    } else if (inputMode === 'chat') {
-      if (recRef.current) {
-        try { recRef.current.abort(); } catch (_) {}
-      }
-    }
-  }, [inputMode, startContinuousListening, isSpeaking]);
-
-  const handleDragStart = (e: React.MouseEvent) => {
-    isDraggingRef.current = true;
-    const startX = e.clientX;
-    const startWidth = panelWidth;
-    const onMove = (ev: MouseEvent) => {
-      if (!isDraggingRef.current) return;
-      setPanelWidth(Math.min(600, Math.max(180, startWidth + ev.clientX - startX)));
-    };
-    const onUp = () => {
-      isDraggingRef.current = false;
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  };
 
   const downloadConversation = useCallback(() => {
     if (messages.length === 0) return;
@@ -340,7 +400,7 @@ export default function TutorPageMediaPipe() {
       localStorage.setItem('eng_tutor_groq', apiKey);
       apiKeyRef.current = apiKey;
       addMessage('bot', "✅ API key saved! Let's start learning English!");
-      speakNatural( "API key saved. Let's start!");
+      speakNatural("API key saved. Let's start!");
       setShowMenu(false);
     } else {
       alert('Please enter a valid Groq API key starting with gsk_');
@@ -349,10 +409,24 @@ export default function TutorPageMediaPipe() {
 
   const handleSendManual = useCallback(() => {
     if (manualInput.trim()) {
+      stopAutoListening();
       processUserInput(manualInput);
       setManualInput('');
     }
-  }, [manualInput, processUserInput]);
+  }, [manualInput, processUserInput, stopAutoListening]);
+
+  const toggleAutoListening = useCallback(() => {
+    setAutoListening(prev => {
+      if (prev) {
+        stopAutoListening();
+      } else {
+        if (!isSpeakingRef.current && !isThinkingRef.current) {
+          startAutoListening();
+        }
+      }
+      return !prev;
+    });
+  }, [stopAutoListening, startAutoListening]);
 
   const ChatPanel = () => (
     <div
@@ -364,19 +438,25 @@ export default function TutorPageMediaPipe() {
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full shrink-0 ${
             status === 'ready'     ? 'bg-emerald-400' :
-            status === 'listening' ? 'bg-orange-400 animate-ping' : 
+            status === 'listening' ? 'bg-orange-400' :
             status === 'thinking'  ? 'bg-yellow-400 animate-pulse' :
             'bg-blue-400 animate-pulse'
           }`} />
           <span className="text-xs font-medium text-white/80 truncate">
-            {status === 'ready'     ? 'Auto-Listening Ready' :
-             status === 'listening' ? '🎙️ Always Listening...' :
+            {status === 'ready'     ? 'Ready' :
+             status === 'listening' ? '🎤 Listening...' :
              status === 'thinking'  ? '💭 Thinking...' :
-             '🔊 Ms. Maria Speaking...'}
+             '🔊 Speaking...'}
           </span>
         </div>
         <div className="flex items-center gap-1">
+          <button onClick={toggleAutoListening}
+            title={autoListening ? "Auto-listening ON" : "Auto-listening OFF"}
+            className={`w-7 h-7 rounded-full flex items-center justify-center ${autoListening ? 'bg-green-500/40' : 'bg-white/10'}`}>
+            <Mic className={`w-3.5 h-3.5 ${autoListening ? 'text-green-300' : 'text-white/50'}`} />
+          </button>
           <button onClick={downloadConversation} disabled={messages.length === 0}
+            title="Download conversation"
             className="w-7 h-7 rounded-full bg-white/10 hover:bg-green-500/40 disabled:opacity-30 flex items-center justify-center">
             <Download className="w-3.5 h-3.5 text-white" />
           </button>
@@ -388,19 +468,32 @@ export default function TutorPageMediaPipe() {
             className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center">
             {showMenu ? <X className="w-3.5 h-3.5 text-white" /> : <Menu className="w-3.5 h-3.5 text-white" />}
           </button>
+          {isMobile && (
+            <button onClick={() => setShowPanel(false)}
+              className="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center ml-1">
+              <X className="w-3.5 h-3.5 text-white" />
+            </button>
+          )}
         </div>
       </div>
 
       {/* Messages */}
-      <div ref={chatAreaRef} className="overflow-y-auto p-3 flex flex-col gap-3 flex-1" style={{ display: showChat ? 'flex' : 'none' }}>
-        {messages.length === 0 && <p className="text-white/25 text-xs text-center mt-10">Speak anything in English...</p>}
+      <div ref={chatAreaRef}
+        className="overflow-y-auto p-3 flex flex-col gap-3"
+        style={{ flex: '1 1 0', minHeight: 0, display: showChat ? 'flex' : 'none' }}
+      >
+        {messages.length === 0 && (
+          <p className="text-white/25 text-xs text-center mt-10">Conversation will appear here...</p>
+        )}
         {messages.map((msg, idx) => (
           <div key={idx} className="flex flex-col gap-1">
             <span className={`text-[10px] px-1 ${msg.role === 'user' ? 'text-blue-300/60 text-right' : 'text-white/30'}`}>
               {msg.role === 'user' ? 'You' : 'Ms. Maria'}
             </span>
             <div className={`w-full px-3 py-2.5 rounded-xl text-xs leading-relaxed break-words whitespace-pre-wrap ${
-              msg.role === 'user' ? 'bg-blue-600/80 text-white' : 'bg-white/8 text-white/85 border border-white/10'
+              msg.role === 'user'
+                ? 'bg-blue-600/80 text-white'
+                : 'bg-white/8 text-white/85 border border-white/10'
             }`}>
               {msg.content}
             </div>
@@ -408,26 +501,70 @@ export default function TutorPageMediaPipe() {
         ))}
       </div>
 
-      {/* Input area indicator */}
-      <div className="p-3 border-t border-white/10 shrink-0">
+      {/* Input area */}
+      <div className="p-3 border-t border-white/10 shrink-0 flex flex-col gap-2">
         {inputMode === 'mic' ? (
-          <div className="flex flex-col gap-2">
-            <div className={`w-full py-2.5 rounded-full text-xs font-semibold text-center transition-all ${
-              isListening ? 'bg-orange-500/20 text-orange-300 border border-orange-500/40' : 'bg-white/5 text-white/40'
-            }`}>
-              {isListening ? '🎙️ Speak freely (5s silence triggers AI)' : status === 'thinking' ? '💭 Processing...' : '🔊 Ms. Maria Speaking...'}
+          <>
+            {/* Status message */}
+            <div className="text-center text-xs text-white/50">
+              {autoListening ? (
+                isListening ? '🎤 Listening... Speak now' : 
+                isSpeaking ? '🔊 Ms. Maria is speaking...' :
+                status === 'thinking' ? '💭 Thinking...' :
+                '✅ Auto-listening is ON'
+              ) : (
+                '⏸️ Auto-listening is OFF - Tap Mic button to start'
+              )}
             </div>
+            
+            {/* Mic button (fallback) */}
+            <button
+              onClick={handleMicPress}
+              disabled={isSpeaking || isThinkingRef.current}
+              className={`w-full py-3 rounded-full text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
+                isListening
+                  ? 'bg-orange-500 text-white shadow-lg shadow-orange-900/40'
+                  : isSpeaking || status === 'thinking'
+                    ? 'bg-white/5 text-white/30 cursor-not-allowed border border-white/10'
+                    : autoListening
+                      ? 'bg-green-600 hover:bg-green-500 text-white'
+                      : 'bg-blue-600 hover:bg-blue-500 text-white'
+              }`}
+            >
+              <Mic className={`w-4 h-4 ${isListening ? 'animate-pulse' : ''}`} />
+              {isListening ? 'Listening... (tap to stop)' : 
+               isSpeaking ? '🔊 Ms. Maria speaking...' : 
+               status === 'thinking' ? '💭 Thinking...' :
+               autoListening ? 'Auto Mode ON' : 'Start Listening'}
+            </button>
+
+            {/* Stop AI button */}
             {isSpeaking && (
-              <button onClick={stopSpeaking} className="w-full py-2 rounded-full text-xs font-medium bg-red-500/20 border border-red-400/50 text-red-300 flex items-center justify-center gap-2">
-                <Square className="w-3 h-3 fill-red-300" /> Stop Ms. Maria & Speak
+              <button onClick={stopSpeaking}
+                className="w-full py-2 rounded-full text-xs font-medium flex items-center justify-center gap-2 bg-red-500/20 border border-red-400/50 hover:bg-red-500/40 text-red-300">
+                <Square className="w-3 h-3 fill-red-300" /> Stop Ms. Maria
               </button>
             )}
-            {micError && <p className="text-red-400 text-xs text-center px-2">{micError}</p>}
-          </div>
+
+            {/* Error message */}
+            {micError && (
+              <p className="text-red-400 text-xs text-center px-2">{micError}</p>
+            )}
+          </>
         ) : (
           <div className="flex gap-2">
-            <input type="text" value={manualInput} onChange={e => setManualInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSendManual()} placeholder="Type in English..." className="flex-1 bg-white/10 border border-white/15 rounded-full px-3 py-1.5 text-xs text-white placeholder-white/30 outline-none focus:border-blue-400 min-w-0" />
-            <button onClick={handleSendManual} className="w-7 h-7 bg-blue-600 hover:bg-blue-500 rounded-full flex items-center justify-center shrink-0"><Send className="w-3 h-3 text-white" /></button>
+            <input
+              type="text"
+              value={manualInput}
+              onChange={e => setManualInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleSendManual()}
+              placeholder="Type in English..."
+              className="flex-1 bg-white/10 border border-white/15 rounded-full px-3 py-1.5 text-xs text-white placeholder-white/30 outline-none focus:border-blue-400 min-w-0"
+            />
+            <button onClick={handleSendManual}
+              className="w-7 h-7 bg-blue-600 hover:bg-blue-500 rounded-full flex items-center justify-center shrink-0">
+              <Send className="w-3 h-3 text-white" />
+            </button>
           </div>
         )}
       </div>
@@ -436,6 +573,8 @@ export default function TutorPageMediaPipe() {
 
   return (
     <div className="flex w-full h-screen overflow-hidden bg-black">
+
+      {/* Mobile overlay */}
       {isMobile && showPanel && (
         <div className="absolute inset-0 z-30 flex">
           <ChatPanel />
@@ -443,55 +582,118 @@ export default function TutorPageMediaPipe() {
         </div>
       )}
 
+      {/* Desktop panel */}
       {!isMobile && <ChatPanel />}
-      {!isMobile && <div onMouseDown={handleDragStart} className="w-1 h-full bg-white/10 hover:bg-blue-400/60 cursor-col-resize transition-colors shrink-0 z-20" />}
 
-      {/* Area Visual Avatar */}
+      {/* Drag handle */}
+      {!isMobile && (
+        <div onMouseDown={handleDragStart}
+          className="w-1 h-full bg-white/10 hover:bg-blue-400/60 cursor-col-resize transition-colors shrink-0 z-20" />
+      )}
+
+      {/* Teacher */}
       <div className="relative flex-1 h-full">
-        <img src="/teacher.png" alt="Ms. Maria" className="absolute inset-0 w-full h-full object-cover" style={{ objectPosition: '50% 10%' }} />
+        <img
+          src="/teacher.png"
+          alt="Ms. Maria"
+          className="absolute inset-0 w-full h-full object-cover"
+          style={{ objectPosition: '50% 10%' }}
+        />
         <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/70 to-transparent pointer-events-none" />
 
+        {/* Mobile open panel */}
         {isMobile && !showPanel && (
-          <button onClick={() => setShowPanel(true)} className="absolute top-4 left-4 z-20 w-10 h-10 bg-black/60 backdrop-blur-md border border-white/20 rounded-full flex items-center justify-center">
+          <button onClick={() => setShowPanel(true)}
+            className="absolute top-4 left-4 z-20 w-10 h-10 bg-black/60 backdrop-blur-md border border-white/20 rounded-full flex items-center justify-center">
             <Menu className="w-5 h-5 text-white" />
           </button>
         )}
 
-        {/* Status indicator melayang untuk Mobile */}
-        <div className="absolute bottom-16 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-2">
-          <div className={`px-4 py-2 rounded-full text-xs font-bold shadow-lg backdrop-blur-md border ${
-            isListening ? 'bg-orange-600/80 border-orange-400 text-white animate-pulse' : 'bg-blue-600/80 border-blue-400 text-white'
-          }`}>
-            {isListening ? '🎙️ Always Listening' : status === 'thinking' ? '💭 Thinking' : '🔊 Speaking'}
+        {/* Mobile mic button floating */}
+        {isMobile && (
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3">
+            <button
+              onClick={handleMicPress}
+              disabled={isSpeaking}
+              className={`px-6 h-12 rounded-full flex items-center gap-2 border-2 font-semibold text-sm transition-all ${
+                isListening
+                  ? 'bg-orange-500 border-orange-400 text-white'
+                  : isSpeaking
+                    ? 'bg-black/60 border-white/20 text-white/40 cursor-not-allowed'
+                    : autoListening
+                      ? 'bg-green-600 border-green-400 text-white'
+                      : 'bg-blue-600 border-blue-400 text-white'
+              }`}
+            >
+              <Mic className={`w-5 h-5 ${isListening ? 'animate-pulse' : ''}`} />
+              {isListening ? 'Stop' : isSpeaking ? '🔊' : autoListening ? 'Auto' : 'Mic'}
+            </button>
+            {isSpeaking && (
+              <button onClick={stopSpeaking}
+                className="w-12 h-12 rounded-full bg-red-500/30 border-2 border-red-400/60 flex items-center justify-center">
+                <Square className="w-5 h-5 text-red-400 fill-red-400" />
+              </button>
+            )}
           </div>
-        </div>
+        )}
 
+        {/* Name tag */}
         <div className="absolute bottom-5 left-1/2 -translate-x-1/2 bg-black/50 backdrop-blur-md rounded-full px-4 py-1.5 border border-white/10">
           <span className="text-sm font-medium text-white">Ms. Maria · English Tutor AI</span>
         </div>
       </div>
 
-      {/* Menu Options Pop-up */}
+      {/* Menu */}
       {showMenu && (
-        <div className={`absolute z-50 w-64 bg-gray-950/97 backdrop-blur-xl rounded-2xl border border-white/10 p-4 shadow-2xl flex flex-col gap-3 ${isMobile ? 'top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2' : 'top-14 left-4'}`}>
+        <div className={`absolute z-50 w-64 bg-gray-950/97 backdrop-blur-xl rounded-2xl border border-white/10 p-4 shadow-2xl flex flex-col gap-3 ${
+          isMobile ? 'top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2' : 'top-14 left-4'
+        }`}>
           <div>
             <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">🔑 Groq API Key</p>
             <div className="flex gap-2">
-              <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="gsk_..." className="flex-1 bg-gray-800 border border-gray-600 rounded-full px-3 py-1.5 text-xs text-white placeholder-gray-500 outline-none min-w-0" />
-              <button onClick={handleSaveApiKey} className="bg-blue-600 text-white rounded-full px-3 py-1.5 text-xs font-bold shrink-0">Save</button>
+              <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
+                placeholder="gsk_..."
+                className="flex-1 bg-gray-800 border border-gray-600 rounded-full px-3 py-1.5 text-xs text-white placeholder-gray-500 outline-none min-w-0" />
+              <button onClick={handleSaveApiKey}
+                className="bg-blue-600 text-white rounded-full px-3 py-1.5 text-xs font-bold shrink-0">Save</button>
             </div>
+            <p className="text-xs text-gray-500 mt-1">Free key: <a href="https://console.groq.com" target="_blank" rel="noopener noreferrer" className="text-blue-400">console.groq.com</a></p>
           </div>
           <div>
-            <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">🎤 Input Mode</p>
-            <div className="flex gap-1.5">
-              {(['mic','chat'] as const).map(m => (
-                <button key={m} onClick={() => setInputMode(m)} className={`flex-1 py-1.5 rounded-full text-xs font-medium ${inputMode === m ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300'}`}>
-                  {m === 'mic' ? '🎙️ Continuous Mic' : '⌨️ Type Chat'}
+            <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">📘 Mode</p>
+            <div className="grid grid-cols-2 gap-1.5">
+              {['conversation','grammar','vocabulary','roleplay'].map(m => (
+                <button key={m} onClick={() => setCurrentMode(m)}
+                  className={`py-1.5 rounded-full text-xs font-medium ${currentMode === m ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300'}`}>
+                  {m.charAt(0).toUpperCase() + m.slice(1)}
                 </button>
               ))}
             </div>
           </div>
-          <button onClick={() => setShowMenu(false)} className="w-full py-1.5 rounded-full text-xs bg-gray-800 text-gray-400">Close</button>
+          <div>
+            <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">🎯 Level</p>
+            <div className="flex gap-1.5">
+              {['beginner','intermediate','advanced'].map(l => (
+                <button key={l} onClick={() => setCurrentLevel(l)}
+                  className={`flex-1 py-1.5 rounded-full text-xs font-medium ${currentLevel === l ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300'}`}>
+                  {l.charAt(0).toUpperCase() + l.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">🎤 Input</p>
+            <div className="flex gap-1.5">
+              {(['mic','chat'] as const).map(m => (
+                <button key={m} onClick={() => setInputMode(m)}
+                  className={`flex-1 py-1.5 rounded-full text-xs font-medium ${inputMode === m ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300'}`}>
+                  {m === 'mic' ? '🎙️ Mic (Auto)' : '⌨️ Type'}
+                </button>
+              ))}
+            </div>
+          </div>
+          <button onClick={() => setShowMenu(false)}
+            className="w-full py-1.5 rounded-full text-xs bg-gray-800 text-gray-400">Close</button>
         </div>
       )}
     </div>
