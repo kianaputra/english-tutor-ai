@@ -37,7 +37,7 @@ export default function TutorPageMediaPipe() {
   const autoListenRef = useRef(true);
   const autoStartTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Update refs
+  // Update refs untuk menghindari re-creation useCallback berlebih
   useEffect(() => { isSpeakingRef.current = isSpeaking; }, [isSpeaking]);
   useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
   useEffect(() => { apiKeyRef.current = apiKey; }, [apiKey]);
@@ -45,7 +45,7 @@ export default function TutorPageMediaPipe() {
   useEffect(() => { currentLevelRef.current = currentLevel; }, [currentLevel]);
   useEffect(() => { autoListenRef.current = isAutoListen; }, [isAutoListen]);
 
-  // Handle resize
+  // Handle resize & cleanup
   useEffect(() => {
     const handleResize = () => {
       const mobile = window.innerWidth < 768;
@@ -58,7 +58,12 @@ export default function TutorPageMediaPipe() {
     return () => {
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('orientationchange', handleResize);
-      stopRecognition();
+      
+      // Cleanup Speech
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch (e) {}
+      }
+      window.speechSynthesis.cancel();
       if (autoStartTimerRef.current) clearTimeout(autoStartTimerRef.current);
     };
   }, []);
@@ -77,6 +82,7 @@ export default function TutorPageMediaPipe() {
     }
   }, []);
 
+  // Memisahkan startRecognition agar tidak memicu circular dependency dengan memanfaatkan ref
   const startRecognition = useCallback(() => {
     if (!autoListenRef.current) return;
     if (isSpeakingRef.current || isThinkingRef.current) return;
@@ -88,7 +94,9 @@ export default function TutorPageMediaPipe() {
       return;
     }
 
-    stopRecognition();
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch (e) {}
+    }
 
     const recognition = new SpeechRecognition();
     recognition.lang = 'en-US';
@@ -109,7 +117,10 @@ export default function TutorPageMediaPipe() {
       if (result && result.isFinal) {
         const text = result[0].transcript.trim();
         if (text) {
-          stopRecognition();
+          // Hentikan mic sebelum memproses text
+          isListeningRef.current = false;
+          setIsListening(false);
+          recognitionRef.current = null;
           processUserInput(text);
         }
       }
@@ -122,13 +133,12 @@ export default function TutorPageMediaPipe() {
         setIsAutoListen(false);
         autoListenRef.current = false;
       } else if (event.error === 'no-speech') {
-        // Silent error, just restart
+        // Silent error
       } else {
         setMicError(`Error: ${event.error}`);
       }
       stopRecognition();
       
-      // Restart if auto listen is on
       if (autoListenRef.current && !isSpeakingRef.current && !isThinkingRef.current) {
         if (autoStartTimerRef.current) clearTimeout(autoStartTimerRef.current);
         autoStartTimerRef.current = setTimeout(() => startRecognition(), 1000);
@@ -140,7 +150,6 @@ export default function TutorPageMediaPipe() {
       setIsListening(false);
       recognitionRef.current = null;
       
-      // Restart if auto listen is on
       if (autoListenRef.current && !isSpeakingRef.current && !isThinkingRef.current) {
         if (autoStartTimerRef.current) clearTimeout(autoStartTimerRef.current);
         autoStartTimerRef.current = setTimeout(() => startRecognition(), 500);
@@ -156,24 +165,7 @@ export default function TutorPageMediaPipe() {
       setMicError('Gagal memulai microphone');
       stopRecognition();
     }
-  }, [processUserInput, stopRecognition]);
-
-  const handleDragStart = (e: React.MouseEvent) => {
-    isDraggingRef.current = true;
-    const startX = e.clientX;
-    const startWidth = panelWidth;
-    const onMove = (ev: MouseEvent) => {
-      if (!isDraggingRef.current) return;
-      setPanelWidth(Math.min(600, Math.max(180, startWidth + ev.clientX - startX)));
-    };
-    const onUp = () => {
-      isDraggingRef.current = false;
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  };
+  }, [stopRecognition]); // processUserInput sengaja dilepas dari dep untuk memutus ikatan sirkular
 
   const addMessage = useCallback((role: 'user' | 'bot', content: string) => {
     setMessages(prev => {
@@ -303,7 +295,8 @@ export default function TutorPageMediaPipe() {
     return data.choices[0].message.content;
   }, []);
 
-  const processUserInput = useCallback(async (text: string) => {
+  // Dideklarasikan menggunakan fungsi reguler atau diletakkan secara runut agar terbaca oleh recognition event handler
+  async function processUserInput(text: string) {
     const trimmed = text.trim();
     if (!trimmed || isThinkingRef.current) return;
     
@@ -332,7 +325,7 @@ export default function TutorPageMediaPipe() {
     } finally {
       isThinkingRef.current = false;
     }
-  }, [addMessage, speakNatural, callGroqAI, startRecognition]);
+  }
 
   const handleMicPress = useCallback(() => {
     if (isListeningRef.current) {
@@ -371,7 +364,24 @@ export default function TutorPageMediaPipe() {
       processUserInput(manualInput);
       setManualInput('');
     }
-  }, [manualInput, processUserInput, stopRecognition]);
+  }, [manualInput, stopRecognition]);
+
+  const handleDragStart = (e: React.MouseEvent) => {
+    isDraggingRef.current = true;
+    const startX = e.clientX;
+    const startWidth = panelWidth;
+    const onMove = (ev: MouseEvent) => {
+      if (!isDraggingRef.current) return;
+      setPanelWidth(Math.min(600, Math.max(180, startWidth + ev.clientX - startX)));
+    };
+    const onUp = () => {
+      isDraggingRef.current = false;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
 
   const downloadConversation = useCallback(() => {
     if (messages.length === 0) return;
@@ -416,10 +426,8 @@ export default function TutorPageMediaPipe() {
       speakNatural(msg);
     }, 1000);
     
-    return () => {
-      clearTimeout(timer);
-    };
-  }, []);
+    return () => clearTimeout(timer);
+  }, [addMessage, speakNatural]);
 
   const ChatPanel = () => (
     <div
@@ -444,7 +452,7 @@ export default function TutorPageMediaPipe() {
         <div className="flex items-center gap-1">
           <button 
             onClick={toggleAutoListen}
-            title={isAutoListen ? "Auto-listen ON" : "Auto-listen OFF"}
+            target-title={isAutoListen ? "Auto-listen ON" : "Auto-listen OFF"}
             className={`w-7 h-7 rounded-full flex items-center justify-center ${isAutoListen ? 'bg-green-500/40' : 'bg-white/10'}`}>
             <Mic className={`w-3.5 h-3.5 ${isAutoListen ? 'text-green-300' : 'text-white/50'}`} />
           </button>
@@ -507,7 +515,7 @@ export default function TutorPageMediaPipe() {
             
             <button
               onClick={handleMicPress}
-              disabled={isSpeaking || isThinkingRef.current}
+              disabled={isSpeaking || status === 'thinking'}
               className={`w-full py-3 rounded-full text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
                 isListening
                   ? 'bg-orange-500 text-white shadow-lg shadow-orange-900/40'
